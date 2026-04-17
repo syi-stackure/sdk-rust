@@ -56,14 +56,19 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --all-features
-      - name: Publish to crates.io
-        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-      - name: Create + push tag
+      - name: Check if version already on crates.io
+        id: crate
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag "${{ needs.check.outputs.tag }}"
-          git push origin "${{ needs.check.outputs.tag }}"
+          version="${{ needs.check.outputs.version }}"
+          if curl -fsS -o /dev/null "https://crates.io/api/v1/crates/stackure/$version"; then
+            echo "Already on crates.io; skipping publish."
+            echo "already=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish to crates.io
+        if: steps.crate.outputs.already == 'false'
+        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Source archive
         run: git archive --format=tar.gz -o "sdk-rust-${{ needs.check.outputs.tag }}.tar.gz" HEAD
       - name: Attest provenance
@@ -77,6 +82,12 @@ jobs:
           cosign sign-blob --yes \
             --bundle "sdk-rust-${{ needs.check.outputs.tag }}.tar.gz.sigstore" \
             "sdk-rust-${{ needs.check.outputs.tag }}.tar.gz"
+      - name: Create + push tag (last; only if all prior steps passed)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "${{ needs.check.outputs.tag }}"
+          git push origin "${{ needs.check.outputs.tag }}"
       - name: GitHub Release
         uses: softprops/action-gh-release@v3
         with:
