@@ -1,4 +1,4 @@
-name: Release on VERSION bump
+name: Release (date-based auto)
 
 on:
   push:
@@ -17,82 +17,51 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
+  release:
     runs-on: ubuntu-latest
-    outputs:
-      skip: ${{ steps.gate.outputs.skip }}
-      version: ${{ steps.v.outputs.version }}
-      tag: ${{ steps.v.outputs.tag }}
     steps:
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - name: Read version
+      - name: Compute date-based version
         id: v
         run: |
-          version=$(grep -E '^version = ' Cargo.toml | head -1 | sed -E 's/version = "(.*)"/\1/')
+          version="1.$(date -u +%Y%m%d).${GITHUB_RUN_NUMBER}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
-      - name: Should release?
-        id: gate
+      - name: Set version in Cargo.toml
         run: |
-          if git rev-parse --verify "refs/tags/${{ steps.v.outputs.tag }}" >/dev/null 2>&1; then
-            echo "Tag ${{ steps.v.outputs.tag }} already exists. Skipping."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-
-  release:
-    needs: check
-    if: needs.check.outputs.skip == 'false'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      id-token: write
-      attestations: write
-    steps:
-      - uses: actions/checkout@v6
+          sed -i -E "0,/^version = \"[^\"]*\"/ s//version = \"${{ steps.v.outputs.version }}\"/" Cargo.toml
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --all-features
-      - name: Check if version already on crates.io
-        id: crate
-        run: |
-          version="${{ needs.check.outputs.version }}"
-          if curl -fsS -o /dev/null "https://crates.io/api/v1/crates/stackure/$version"; then
-            echo "Already on crates.io; skipping publish."
-            echo "already=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "already=false" >> "$GITHUB_OUTPUT"
-          fi
       - name: Publish to crates.io
-        if: steps.crate.outputs.already == 'false'
-        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }} --allow-dirty
       - name: Source archive
-        run: git archive --format=tar.gz -o "sdk-rust-${{ needs.check.outputs.tag }}.tar.gz" HEAD
+        run: |
+          # restore original Cargo.toml so archive matches the repo state
+          git checkout -- Cargo.toml
+          git archive --format=tar.gz -o "sdk-rust-${{ steps.v.outputs.tag }}.tar.gz" HEAD
       - name: Attest provenance
         uses: actions/attest-build-provenance@v4
         with:
-          subject-path: "sdk-rust-${{ needs.check.outputs.tag }}.tar.gz"
+          subject-path: "sdk-rust-${{ steps.v.outputs.tag }}.tar.gz"
       - name: Install cosign
         uses: sigstore/cosign-installer@v4.1.1
       - name: Sign archive
         run: |
           cosign sign-blob --yes \
-            --bundle "sdk-rust-${{ needs.check.outputs.tag }}.tar.gz.sigstore" \
-            "sdk-rust-${{ needs.check.outputs.tag }}.tar.gz"
-      - name: Create + push tag (last; only if all prior steps passed)
+            --bundle "sdk-rust-${{ steps.v.outputs.tag }}.tar.gz.sigstore" \
+            "sdk-rust-${{ steps.v.outputs.tag }}.tar.gz"
+      - name: Create + push tag
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag "${{ needs.check.outputs.tag }}"
-          git push origin "${{ needs.check.outputs.tag }}"
+          git tag "${{ steps.v.outputs.tag }}"
+          git push origin "${{ steps.v.outputs.tag }}"
       - name: GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ needs.check.outputs.tag }}
+          tag_name: ${{ steps.v.outputs.tag }}
           files: |
-            sdk-rust-${{ needs.check.outputs.tag }}.tar.gz
-            sdk-rust-${{ needs.check.outputs.tag }}.tar.gz.sigstore
+            sdk-rust-${{ steps.v.outputs.tag }}.tar.gz
+            sdk-rust-${{ steps.v.outputs.tag }}.tar.gz.sigstore
           generate_release_notes: true
