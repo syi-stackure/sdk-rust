@@ -75,8 +75,7 @@ jobs:
       - name: Sign archive
         run: |
           cosign sign-blob --yes \
-            --output-signature "sdk-rust-${{ needs.check.outputs.tag }}.tar.gz.sig" \
-            --output-certificate "sdk-rust-${{ needs.check.outputs.tag }}.tar.gz.pem" \
+            --bundle "sdk-rust-${{ needs.check.outputs.tag }}.tar.gz.sigstore" \
             "sdk-rust-${{ needs.check.outputs.tag }}.tar.gz"
       - name: GitHub Release
         uses: softprops/action-gh-release@v3
@@ -84,6 +83,5 @@ jobs:
           tag_name: ${{ needs.check.outputs.tag }}
           files: |
             sdk-rust-${{ needs.check.outputs.tag }}.tar.gz
-            sdk-rust-${{ needs.check.outputs.tag }}.tar.gz.sig
-            sdk-rust-${{ needs.check.outputs.tag }}.tar.gz.pem
+            sdk-rust-${{ needs.check.outputs.tag }}.tar.gz.sigstore
           generate_release_notes: true
