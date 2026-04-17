@@ -1,6 +1,6 @@
 # Stackure Rust SDK
 
-[![CI](https://github.com/syi-stackure/sdk-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/syi-stackure/sdk-rust/actions/workflows/ci.yml)
+[![Check build](https://github.com/syi-stackure/sdk-rust/actions/workflows/check-build.yml/badge.svg)](https://github.com/syi-stackure/sdk-rust/actions/workflows/check-build.yml)
 [![crates.io](https://img.shields.io/crates/v/stackure.svg)](https://crates.io/crates/stackure)
 [![docs.rs](https://img.shields.io/docsrs/stackure)](https://docs.rs/stackure)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
