@@ -1,15 +1,16 @@
 # Build
-/target/
+target/
+
+# Lockfile (convention: libraries do not commit Cargo.lock)
+Cargo.lock
 
 # IDE
 .idea/
 .vscode/
 *.swp
-*.swo
 
 # OS
 .DS_Store
-Thumbs.db
 
 # Env
 .env

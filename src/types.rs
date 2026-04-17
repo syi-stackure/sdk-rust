@@ -1,8 +1,8 @@
-//! Data types returned by the Stackure SDK.
+//! Public types returned by the Stackure SDK.
 
 use serde::{Deserialize, Serialize};
 
-/// Authenticated user information returned from Stackure.
+/// An authenticated Stackure user.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
     /// Unique identifier for the user.
@@ -13,54 +13,52 @@ pub struct User {
     pub user_first_name: String,
     /// User's last name.
     pub user_last_name: String,
-    /// List of role names assigned to the user.
+    /// Roles assigned to the user for the current app.
     #[serde(default)]
     pub user_roles: Vec<String>,
 }
 
-/// Response from a session validation request.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionValidationResponse {
-    /// Whether the session is currently valid.
-    pub authenticated: bool,
-    /// Authenticated user details. Present only when `authenticated` is `true`.
-    pub user: Option<User>,
-    /// Redirect URL for unauthenticated users to initiate sign-in.
-    pub sign_in_url: Option<String>,
-}
-
-/// Response from a magic-link send request.
+/// Successful `send_magic_link` response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MagicLinkResponse {
-    /// Human-readable status message from the API.
+    /// Human-readable confirmation from the API.
     pub message: String,
-    /// Verification token returned in local/testing environments only.
-    pub token: Option<String>,
 }
 
-/// Result of an authentication verification check.
+/// Outcome of a [`crate::verify`] call.
+///
+/// Exactly one of `user` or `error` is populated depending on `authenticated`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerifyResult {
     /// Whether the request carries a valid session.
     pub authenticated: bool,
-    /// Authenticated user details. Present only when `authenticated` is `true`.
+    /// Authenticated user (only when `authenticated` is `true`).
     pub user: Option<User>,
-    /// Error context when `authenticated` is `false`.
+    /// Error context (only when `authenticated` is `false`).
     pub error: Option<VerifyError>,
 }
 
-/// Error details from a failed verification check.
+/// Details of a failed verification.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerifyError {
-    /// HTTP status code associated with the failure.
+    /// HTTP status code — `401`, `403`, or `500`.
     pub code: u16,
-    /// Human-readable error message.
+    /// Human-readable message.
     pub message: String,
-    /// Redirect URL for unauthenticated users.
+    /// URL to redirect an unauthenticated user for sign-in.
     pub sign_in_url: Option<String>,
 }
 
-/// Internal request body for sending a magic link.
+/// Internal session-validation response. Mapped into [`VerifyResult`] before
+/// returning to callers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct SessionValidationResponse {
+    pub authenticated: bool,
+    pub user: Option<User>,
+    pub sign_in_url: Option<String>,
+}
+
+/// Internal request body for the magic-link endpoint.
 #[derive(Debug, Serialize)]
 pub(crate) struct SendMagicLinkRequest {
     pub user_email: String,
