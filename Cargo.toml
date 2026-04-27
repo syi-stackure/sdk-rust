@@ -31,7 +31,7 @@ must_use_candidate = "allow"
 # minor bumps are breaking in semver, so we track the 0.12.x series).
 # "1" == "^1" floats within the 1.x major. Upstream fixes flow in automatically
 # on the next cargo update.
-reqwest = { version = "0.12", features = ["cookies", "json"] }
+reqwest = { version = "0.13", features = ["cookies", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt", "macros", "time"] }
