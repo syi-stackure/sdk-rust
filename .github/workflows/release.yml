@@ -57,12 +57,13 @@ jobs:
           cosign sign-blob --yes \
             --bundle "sdk-rust-${{ steps.v.outputs.tag }}.tar.gz.sigstore" \
             "sdk-rust-${{ steps.v.outputs.tag }}.tar.gz"
-      - name: Create + push tag
+      - name: Create tag
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag "${{ steps.v.outputs.tag }}"
-          git push origin "${{ steps.v.outputs.tag }}"
+          gh api "repos/${{ github.repository }}/git/refs" \
+            -f ref="refs/tags/${{ steps.v.outputs.tag }}" \
+            -f sha="${{ github.sha }}"
       - name: GitHub Release
         uses: softprops/action-gh-release@v3
         with:
