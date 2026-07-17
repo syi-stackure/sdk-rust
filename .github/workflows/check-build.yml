@@ -26,7 +26,7 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo check --all-features
-      - name: Auto-merge if green
-        run: gh pr merge --squash --delete-branch "${{ github.event.pull_request.html_url }}"
+      - name: Enable auto-merge
+        run: gh pr merge --squash --auto "${{ github.event.pull_request.html_url }}"
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.MERGE_PAT || secrets.GITHUB_TOKEN }}
