@@ -1,44 +1,57 @@
 //! Stackure SDK error type.
 
-/// The single error type returned by every SDK function.
+use std::fmt;
+
+/// The single error type returned by every fallible SDK function.
 ///
 /// Match on the variant to branch on category, or call
-/// [`StackureError::code`] for a stable string matching the other SDKs.
-#[derive(Debug, thiserror::Error)]
+/// [`StackureError::code`] for the stable string the other Stackure SDKs
+/// expose as `.code`.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StackureError {
     /// Input validation failed before a request was made.
-    #[error("stackure: validation: {0}")]
     Validation(String),
-
-    /// An HTTP request failed or the API returned an unsuccessful response.
-    #[error("stackure: network: {0}")]
-    Network(String),
-
-    /// The API returned a 401 Unauthorized response.
-    #[error("stackure: auth: {0}")]
+    /// The API returned 401 Unauthorized.
     Auth(String),
-
-    /// An HTTP request exceeded the timeout.
-    #[error("stackure: timeout: {0}")]
-    Timeout(String),
-
-    /// The authenticated user lacks the required role.
-    #[error("stackure: forbidden: {0}")]
+    /// The API returned 403 Forbidden.
     Forbidden(String),
+    /// The request exceeded the 2-second timeout.
+    Timeout(String),
+    /// Any other transport or API failure.
+    Network(String),
 }
 
 impl StackureError {
-    /// Returns a stable, lowercase category string (`"validation"`, `"network"`,
-    /// `"auth"`, `"timeout"`, or `"forbidden"`). Matches the `.code` field on
-    /// the other Stackure SDKs.
+    /// The stable, lowercase category: `"validation"`, `"auth"`,
+    /// `"forbidden"`, `"timeout"`, or `"network"`.
     #[must_use]
     pub fn code(&self) -> &'static str {
         match self {
             Self::Validation(_) => "validation",
-            Self::Network(_) => "network",
             Self::Auth(_) => "auth",
-            Self::Timeout(_) => "timeout",
             Self::Forbidden(_) => "forbidden",
+            Self::Timeout(_) => "timeout",
+            Self::Network(_) => "network",
+        }
+    }
+
+    /// The human-readable description, without the `stackure:` prefix.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Validation(m)
+            | Self::Auth(m)
+            | Self::Forbidden(m)
+            | Self::Timeout(m)
+            | Self::Network(m) => m,
         }
     }
 }
+
+impl fmt::Display for StackureError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "stackure: {}: {}", self.code(), self.message())
+    }
+}
+
+impl std::error::Error for StackureError {}

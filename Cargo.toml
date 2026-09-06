@@ -1,7 +1,7 @@
 [package]
 name = "stackure"
 version = "0.0.2"
-edition = "2021"
+edition = "2024"
 description = "Official Stackure authentication SDK for Rust"
 license = "MIT"
 repository = "https://github.com/syi-stackure/sdk-rust"
@@ -15,10 +15,6 @@ categories = ["authentication", "web-programming"]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
-[lints.rust]
-unsafe_code = "forbid"
-missing_docs = "warn"
-
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 module_name_repetitions = "allow"
@@ -26,17 +22,25 @@ missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 must_use_candidate = "allow"
 
+[features]
+default = ["axum"]
+# Reads the peer address from axum's ConnectInfo when X-Forwarded-For is absent.
+axum = ["dep:axum"]
+
 [dependencies]
-# Cargo version specs are compat ranges, not pins. "0.13" == "^0.13" (pre-1.0
-# minor bumps are breaking in semver, so we track the 0.13.x series).
-# "1" == "^1" floats within the 1.x major. Upstream fixes flow in automatically
-# on the next cargo update.
-reqwest = { version = "0.13", features = ["cookies", "json", "query"] }
+axum = { version = "0.8", optional = true, default-features = false, features = ["tokio"] }
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "tokio", "http1"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "native-tokio", "ring", "tls12"] }
+http-body = "1"
+http-body-util = "0.1"
+http = "1"
+tower = "0.5"
+bytes = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt", "macros", "time"] }
-thiserror = "2"
-regex = "1"
+tokio = { version = "1", features = ["rt", "time"] }
 
 [dev-dependencies]
+axum = "0.8"
 tokio = { version = "1", features = ["full"] }
