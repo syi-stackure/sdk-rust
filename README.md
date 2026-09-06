@@ -27,7 +27,7 @@ const APP_ID: &str = "7f3c1a2e-9b4d-4e6f-8a1b-2c3d4e5f6071"; // your app's UUID 
 
 let app = Router::new()
     .route("/admin", get(handler))
-    .layer(auth(APP_ID, &["view_any_app"]));
+    .layer(auth(APP_ID, &["can_approve_invoice"]));
 ```
 
 Access the authenticated user in your handler:
@@ -59,7 +59,7 @@ Every request is validated against Stackure, so revocation is immediate.
 ## Verify manually
 
 ```rust
-let result = stackure::verify(APP_ID, &parts, &["view_any_app"]).await;
+let result = stackure::verify(APP_ID, &parts, &["can_approve_invoice"]).await;
 
 if !result.authenticated {
     let error = result.error.unwrap();
