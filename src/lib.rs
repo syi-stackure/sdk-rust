@@ -10,7 +10,7 @@
 //! ```no_run
 //! # use axum::{Router, routing::get};
 //! # let app: Router = Router::new().route("/admin", get(|| async {}));
-//! let app = app.layer(stackure::auth(APP_ID, &["view_any_app"]));
+//! let app = app.layer(stackure::auth(APP_ID, &["can_approve_invoice"]));
 //! # const APP_ID: &str = "7f3c1a2e-9b4d-4e6f-8a1b-2c3d4e5f6071";
 //! ```
 //!

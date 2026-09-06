@@ -26,7 +26,7 @@ use crate::types::{User, VerifyError, VerifyResult};
 ///
 /// ```no_run
 /// # async fn example(parts: &http::request::Parts) {
-/// let result = stackure::verify("7f3c1a2e-9b4d-4e6f-8a1b-2c3d4e5f6071", parts, &["view_any_app"]).await;
+/// let result = stackure::verify("7f3c1a2e-9b4d-4e6f-8a1b-2c3d4e5f6071", parts, &["can_approve_invoice"]).await;
 /// if result.authenticated {
 ///     println!("{}", result.user.unwrap().user_email);
 /// }
@@ -201,7 +201,7 @@ pub fn logout<B: Default>(parts: &Parts) -> Response<B> {
 /// # let app: Router = Router::new().route("/admin", get(|| async {}));
 /// let app = app.layer(stackure::auth(
 ///     "7f3c1a2e-9b4d-4e6f-8a1b-2c3d4e5f6071",
-///     &["view_any_app"],
+///     &["can_approve_invoice"],
 /// ));
 /// ```
 #[must_use]

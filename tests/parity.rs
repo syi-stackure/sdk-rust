@@ -63,7 +63,7 @@ fn serve(stream: &std::net::TcpStream, seen: &Arc<Mutex<Seen>>) {
     let body = if magic_link {
         r#"{"message":"Magic link sent"}"#
     } else if authed {
-        r#"{"authenticated":true,"user":{"user_id":"u1","user_email":"a@b.co","user_first_name":"A","user_last_name":"B","user_permissions":["view_any_app"]}}"#
+        r#"{"authenticated":true,"user":{"user_id":"u1","user_email":"a@b.co","user_first_name":"A","user_last_name":"B","user_permissions":["can_approve_invoice"]}}"#
     } else {
         r#"{"authenticated":false,"sign_in_url":"https://stackure.test/sign-in"}"#
     };
@@ -137,7 +137,7 @@ async fn handoff(seen: &Arc<Mutex<Seen>>) {
         .header("content-type", "application/x-www-form-urlencoded")
         .body(Body::from(format!("session_token={TOK}")))
         .unwrap();
-    let r = call(app(&["view_any_app"]), form).await;
+    let r = call(app(&["can_approve_invoice"]), form).await;
     show("POST form handoff", &r);
     assert_eq!(
         (r.status, r.location.as_str()),
@@ -148,7 +148,7 @@ async fn handoff(seen: &Arc<Mutex<Seen>>) {
     let query = req("GET", &format!("/admin?a=1&session_token={TOK}"))
         .body(Body::empty())
         .unwrap();
-    let r = call(app(&["view_any_app"]), query).await;
+    let r = call(app(&["can_approve_invoice"]), query).await;
     show("GET query handoff", &r);
     assert_eq!(
         (r.status, r.location.as_str()),
@@ -159,7 +159,7 @@ async fn handoff(seen: &Arc<Mutex<Seen>>) {
         .header("cookie", format!("session={TOK}; other=1"))
         .body(Body::empty())
         .unwrap();
-    let r = call(app(&["view_any_app"]), authed).await;
+    let r = call(app(&["can_approve_invoice"]), authed).await;
     show("authed", &r);
     assert_eq!(
         (r.status, r.body.as_str()),
@@ -190,7 +190,7 @@ async fn peer_addr_fallback(seen: &Arc<Mutex<Seen>>) {
             .unwrap(),
     ));
 
-    let r = call(app(&["view_any_app"]), no_xff).await;
+    let r = call(app(&["can_approve_invoice"]), no_xff).await;
     show("no XFF, ConnectInfo", &r);
     assert_eq!(r.status, StatusCode::OK);
     let s = seen.lock().unwrap().clone();
@@ -203,7 +203,7 @@ async fn rejections() {
         .header("accept", "text/html")
         .body(Body::empty())
         .unwrap();
-    let r = call(app(&["view_any_app"]), html).await;
+    let r = call(app(&["can_approve_invoice"]), html).await;
     show("401 html", &r);
     assert_eq!(
         (r.status, r.location.as_str()),
@@ -214,7 +214,7 @@ async fn rejections() {
         .header("accept", "application/json")
         .body(Body::empty())
         .unwrap();
-    let r = call(app(&["view_any_app"]), json).await;
+    let r = call(app(&["can_approve_invoice"]), json).await;
     show("401 json", &r);
     assert_eq!(r.status, StatusCode::UNAUTHORIZED);
     assert!(r.body.contains(r#""error":"Unauthorized""#));
