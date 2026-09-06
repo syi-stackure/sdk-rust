@@ -1,6 +1,6 @@
 [package]
 name = "stackure"
-version = "0.0.45"
+version = "0.0.46"
 edition = "2024"
 description = "Official Stackure authentication SDK for Rust"
 license = "MIT"
