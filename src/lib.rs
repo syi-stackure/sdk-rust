@@ -73,8 +73,9 @@
 //! validation call. Your app must therefore see the real client IP: if it sits
 //! behind a proxy or CDN, ensure that layer sets `X-Forwarded-For` correctly.
 //!
-//! Every request is validated against Stackure, so revoking a session takes
-//! effect immediately.
+//! Every request with a session token is validated against Stackure, so revoking
+//! a session takes effect immediately. Requests without a well-formed token get
+//! the sign-in URL without a Stackure call.
 //!
 //! # Content negotiation
 //!

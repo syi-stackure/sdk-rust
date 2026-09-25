@@ -24,6 +24,17 @@ pub fn validate_email(email: &str) -> Result<(), StackureError> {
     Ok(())
 }
 
+pub(crate) fn is_uuid(value: &str) -> bool {
+    let b = value.as_bytes();
+    b.len() == 36
+        && [8, 13, 18, 23].iter().all(|&i| b[i] == b'-')
+        && b[14] == b'4'
+        && matches!(b[19] | 0x20, b'8' | b'9' | b'a' | b'b')
+        && b.iter()
+            .enumerate()
+            .all(|(i, c)| matches!(i, 8 | 13 | 18 | 23) || c.is_ascii_hexdigit())
+}
+
 /// Validate that `value` is a UUID v4.
 ///
 /// # Errors
@@ -36,16 +47,7 @@ pub fn validate_uuid(value: &str, field_name: &str) -> Result<(), StackureError>
         )));
     }
 
-    let b = value.as_bytes();
-    let shaped = b.len() == 36
-        && [8, 13, 18, 23].iter().all(|&i| b[i] == b'-')
-        && b[14] == b'4'
-        && matches!(b[19] | 0x20, b'8' | b'9' | b'a' | b'b')
-        && b.iter()
-            .enumerate()
-            .all(|(i, c)| matches!(i, 8 | 13 | 18 | 23) || c.is_ascii_hexdigit());
-
-    if !shaped {
+    if !is_uuid(value) {
         return Err(StackureError::Validation(format!(
             "invalid {field_name} format (must be a valid UUID)"
         )));
