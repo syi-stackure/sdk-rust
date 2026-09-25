@@ -54,7 +54,9 @@ Without that header the SDK falls back to the peer address, read from axum's
 `ConnectInfo<SocketAddr>`. Serve with `into_make_service_with_connect_info` to
 make it available, or disable the default `axum` feature if you do not need it.
 
-Every request is validated against Stackure, so revocation is immediate.
+Every request with a session token is validated against Stackure, so revocation
+is immediate. Requests without a well-formed token get the sign-in URL without a
+Stackure call.
 
 ## Verify manually
 

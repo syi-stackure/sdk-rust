@@ -15,7 +15,7 @@ use hyper_util::rt::TokioExecutor;
 
 use crate::errors::StackureError;
 use crate::types::{MagicLinkResponse, Session};
-use crate::validation::{validate_email, validate_uuid};
+use crate::validation::{is_uuid, validate_email, validate_uuid};
 
 const DEFAULT_BASE_URL: &str = "https://stackure.com";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
@@ -30,10 +30,13 @@ pub const TOKEN_PARAM: &str = "session_token";
 /// Resolve `STACKURE_BASE_URL` from the environment, else production.
 #[must_use]
 pub fn base_url() -> String {
-    env::var("STACKURE_BASE_URL").map_or_else(
-        |_| DEFAULT_BASE_URL.to_string(),
-        |v| v.trim_end_matches('/').to_string(),
-    )
+    env::var("STACKURE_BASE_URL")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .map_or_else(
+            || DEFAULT_BASE_URL.to_string(),
+            |v| v.trim_end_matches('/').to_string(),
+        )
 }
 
 fn client() -> &'static Client<HttpsConnector<HttpConnector>, Full<Bytes>> {
@@ -301,6 +304,9 @@ pub async fn send_magic_link(
 
 /// Validate the request's session against Stackure.
 ///
+/// A request without a well-formed session token gets the sign-in URL
+/// without a Stackure call.
+///
 /// Most callers want [`crate::verify`] or [`crate::auth`].
 ///
 /// # Errors
@@ -309,12 +315,20 @@ pub async fn send_magic_link(
 pub async fn validate_session(app_id: &str, parts: &Parts) -> Result<Session, StackureError> {
     validate_uuid(app_id, "App ID")?;
 
+    let token = session_token(parts);
+    if !is_uuid(&token) {
+        return Ok(Session {
+            sign_in_url: format!("{}/sign-in/magic-link?app_id={app_id}", base_url()),
+            ..Session::default()
+        });
+    }
+
     let data = request(
         &Method::GET,
         "/api/public/auth/session/validate",
         CallOpts {
             query: Some(format!("app_id={app_id}")),
-            token: &session_token(parts),
+            token: &token,
             ua: parts
                 .headers
                 .get("user-agent")
