@@ -18,6 +18,16 @@ stackure = "1"
 
 Requires Rust 2024 edition.
 
+## Configure
+
+```bash
+export STACKURE_APP_SECRET=...   # from the app page in Stackure, shown once
+```
+
+Sent as `X-App-Secret` on every call. The first call that actually reaches Stackure fails with `StackureError::Validation` when it is unset. `STACKURE_BASE_URL` optionally overrides the API host.
+
+A newly registered app is not usable by anyone, even its creator, until it is shared with the organization or assigned to a team in Stackure. Do that before testing sign-in.
+
 ## Protect an app
 
 ```rust
@@ -41,22 +51,30 @@ In axum you can also take an `Extension<User>` directly.
 
 - API requests get JSON errors
 - Browser requests get redirected to sign-in
-- The sign-in handoff is automatic: Stackure hands the browser back with a `session_token`, the layer stores it as a cookie on your domain and strips it from the URL
+- The sign-in handoff is automatic: Stackure POSTs a `session_token` (an app-scoped session token valid only for this app) back to your app, the layer validates it and stores it as a cookie on your domain. Handoff bodies over 4 KB are ignored
 
 ## Requirements
 
-Stackure binds sessions to the browser's user agent and IP. The SDK validates
-from your server, so it forwards the original `User-Agent` and
-`X-Forwarded-For`. Your app must see the real client IP — if it runs behind a
-proxy or CDN, make sure that layer sets `X-Forwarded-For`.
+Sessions are not bound to the browser's user agent or IP. The SDK still
+forwards the original `User-Agent` and `X-Forwarded-For` when validating from
+your server, but they are informational only.
 
-Without that header the SDK falls back to the peer address, read from axum's
-`ConnectInfo<SocketAddr>`. Serve with `into_make_service_with_connect_info` to
-make it available, or disable the default `axum` feature if you do not need it.
+When `X-Forwarded-For` is absent the SDK falls back to the peer address, read
+from axum's `ConnectInfo<SocketAddr>`. Serve with
+`into_make_service_with_connect_info` to make it available, or disable the
+default `axum` feature if you do not need it.
+
+The app cookie is marked `Secure` only when the request arrived over TLS as far as the SDK can tell: send `X-Forwarded-Proto: https` from your TLS terminator, since a direct TLS listener is not visible from the request itself.
 
 Every request with a session token is validated against Stackure, so revocation
 is immediate. Requests without a well-formed token get the sign-in URL without a
 Stackure call.
+
+Every call has one 2-second wall-clock deadline covering connect, headers, body
+and the single retry. The SDK retries once, after 500 ms, on a 5xx response or a
+connection failure, and only if more than 500 ms of the deadline remain. A
+timeout, including while reading the body, is `StackureError::Timeout` and is
+never retried.
 
 ## Verify manually
 
@@ -90,17 +108,6 @@ let response: Response<Body> = stackure::logout(&parts);
 Returns a 303 that clears the app's cookie and redirects to Stackure's
 sign-out.
 
-## Configuration
-
-Set `STACKURE_BASE_URL` to point at a non-production environment:
-
-```bash
-STACKURE_BASE_URL=https://stage.stackure.com cargo run
-```
-
-Retry-on-5xx (one retry after 500ms) and the 2-second request timeout are
-hard-coded. Timeouts are never retried.
-
 ## Errors
 
 Everything except `verify` returns `StackureError`. Match on the variant, or
@@ -114,7 +121,7 @@ match stackure::send_magic_link(email, None).await {
     Err(StackureError::Validation(m)) => {}  // bad input
     Err(StackureError::Auth(m)) => {}        // 401 from the API
     Err(StackureError::Forbidden(m)) => {}   // 403 from the API
-    Err(StackureError::Timeout(m)) => {}     // exceeded the 2s timeout
+    Err(StackureError::Timeout(m)) => {}     // exceeded the 2s deadline
     Err(StackureError::Network(m)) => {}     // everything else
     Ok(response) => {}
 }
@@ -129,7 +136,7 @@ higher-level client, so in a typical axum app it adds around twenty crates.
 
 ## Contributing
 
-Open a PR. Releases are cut from `main` by release-plz.
+Open a PR.
 
 ## Security
 

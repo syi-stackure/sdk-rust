@@ -9,13 +9,13 @@ use std::fmt;
 /// expose as `.code`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StackureError {
-    /// Input validation failed before a request was made.
+    /// Input validation failed before a request was made, or `STACKURE_APP_SECRET` is not set.
     Validation(String),
     /// The API returned 401 Unauthorized.
     Auth(String),
     /// The API returned 403 Forbidden.
     Forbidden(String),
-    /// The request exceeded the 2-second timeout.
+    /// The call exceeded its 2-second deadline; never retried.
     Timeout(String),
     /// Any other transport or API failure.
     Network(String),

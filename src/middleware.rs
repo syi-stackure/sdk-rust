@@ -9,11 +9,11 @@ use bytes::Bytes;
 use http::request::Parts;
 use http::{Request, Response, StatusCode};
 use http_body::Body;
-use http_body_util::BodyExt;
+use http_body_util::{BodyExt, Limited};
 use tower::{Layer, Service};
 
 use crate::client::{
-    SESSION_COOKIE, TOKEN_PARAM, base_url, cookie, form_value, query_param, validate_session,
+    SESSION_COOKIE, TOKEN_PARAM, base_url, form_value, origin, validate_session, validate_token,
 };
 use crate::types::{User, VerifyError, VerifyResult};
 
@@ -111,28 +111,21 @@ fn cookie_header(value: &str, secure: bool, max_age: Option<i32>) -> String {
     parts
 }
 
-fn clean_url(parts: &Parts) -> String {
-    let path = parts.uri.path();
-    let query: Vec<&str> = parts
-        .uri
-        .query()
-        .unwrap_or_default()
-        .split('&')
-        .filter(|pair| {
-            !pair.is_empty() && pair.split_once('=').is_none_or(|(k, _)| k != TOKEN_PARAM)
-        })
-        .collect();
+const MAX_HANDOFF_BODY: usize = 4096;
+const SESSION_MAX_AGE: i32 = 604_800;
 
-    if query.is_empty() {
-        path.to_string()
-    } else {
-        format!("{path}?{}", query.join("&"))
-    }
+fn self_url(parts: &Parts) -> &str {
+    parts
+        .uri
+        .path_and_query()
+        .map(http::uri::PathAndQuery::as_str)
+        .filter(|p| p.starts_with('/') && !p.starts_with("//") && !p.starts_with("/\\"))
+        .unwrap_or("/")
 }
 
 fn wants_form_token(parts: &Parts) -> bool {
     parts.method == http::Method::POST
-        && cookie(parts, SESSION_COOKIE).is_empty()
+        && parts.headers.get("origin").and_then(|v| v.to_str().ok()) == Some(origin().as_str())
         && parts
             .headers
             .get("content-type")
@@ -188,11 +181,11 @@ pub fn logout<B: Default>(parts: &Parts) -> Response<B> {
 /// Middleware that enforces authentication, for any tower stack — axum,
 /// tonic, or hyper.
 ///
-/// Completes Stackure's sign-in handoff by storing the returned
-/// `session_token` as a cookie on your domain, then stripping it from the
-/// URL. On success the user is inserted into the request extensions (read it
-/// back with [`user_from_request`]). Browser requests get redirected to
-/// sign-in on 401; API requests get JSON.
+/// Completes Stackure's sign-in handoff by validating the posted
+/// `session_token` and storing it as a cookie on your domain. On success the
+/// user is inserted into the request extensions (read it back with
+/// [`user_from_request`]). Browser requests get redirected to sign-in on 401;
+/// API requests get JSON.
 ///
 /// # Example
 ///
@@ -246,6 +239,7 @@ where
     S: Service<Request<ReqB>, Response = Response<ResB>> + Clone + Send + 'static,
     S::Future: Send + 'static,
     ReqB: Body<Data = Bytes> + From<Bytes> + Send + 'static,
+    ReqB::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     ResB: From<Bytes> + Send + 'static,
 {
     type Response = Response<ResB>;
@@ -265,24 +259,31 @@ where
         Box::pin(async move {
             let (mut parts, body) = req.into_parts();
 
-            let mut token = query_param(&parts, TOKEN_PARAM);
-            let body = if !token.is_empty() || !wants_form_token(&parts) {
-                body
-            } else {
-                let bytes = body
+            let mut token = String::new();
+            let body = if wants_form_token(&parts) {
+                let bytes = Limited::new(body, MAX_HANDOFF_BODY)
                     .collect()
                     .await
                     .map(http_body_util::Collected::to_bytes)
                     .unwrap_or_default();
                 token = form_value(&String::from_utf8_lossy(&bytes), TOKEN_PARAM);
                 ReqB::from(bytes)
+            } else {
+                body
             };
 
-            if !token.is_empty() {
+            if !token.is_empty()
+                && validate_token(&app_id, &token, &parts)
+                    .await
+                    .is_ok_and(|s| s.authenticated)
+            {
                 return Ok(Response::builder()
                     .status(StatusCode::SEE_OTHER)
-                    .header("location", clean_url(&parts))
-                    .header("set-cookie", cookie_header(&token, is_https(&parts), None))
+                    .header("location", self_url(&parts))
+                    .header(
+                        "set-cookie",
+                        cookie_header(&token, is_https(&parts), Some(SESSION_MAX_AGE)),
+                    )
                     .body(ResB::from(Bytes::new()))
                     .expect("handoff response is always valid"));
             }
