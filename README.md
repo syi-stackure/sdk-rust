@@ -44,7 +44,7 @@ Access the authenticated user in your handler:
 
 ```rust
 let user = user_from_request(&parts).unwrap();
-println!("{} {:?}", user.user_email, user.user_permissions);
+println!("{} {} {:?}", user.user_email, user.account_id, user.user_permissions);
 ```
 
 In axum you can also take an `Extension<User>` directly.
