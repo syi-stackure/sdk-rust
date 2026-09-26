@@ -39,17 +39,37 @@ pub fn base_url() -> String {
         )
 }
 
-fn client() -> &'static Client<HttpsConnector<HttpConnector>, Full<Bytes>> {
-    static CLIENT: OnceLock<Client<HttpsConnector<HttpConnector>, Full<Bytes>>> = OnceLock::new();
-    CLIENT.get_or_init(|| {
-        let https = hyper_rustls::HttpsConnectorBuilder::new()
-            .with_native_roots()
-            .expect("no native root certificates found")
-            .https_or_http()
-            .enable_http1()
-            .build();
-        Client::builder(TokioExecutor::new()).build(https)
-    })
+fn app_secret() -> Result<String, StackureError> {
+    env::var("STACKURE_APP_SECRET")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| StackureError::Validation("STACKURE_APP_SECRET is not set".into()))
+}
+
+pub(crate) fn origin() -> String {
+    base_url()
+        .parse::<http::Uri>()
+        .ok()
+        .and_then(|u| Some(format!("{}://{}", u.scheme_str()?, u.authority()?)))
+        .unwrap_or_default()
+}
+
+type HttpsClient = Client<HttpsConnector<HttpConnector>, Full<Bytes>>;
+
+fn client() -> Result<&'static HttpsClient, StackureError> {
+    static CLIENT: OnceLock<Result<HttpsClient, String>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            let https = hyper_rustls::HttpsConnectorBuilder::new()
+                .with_native_roots()
+                .map_err(|e| format!("no native root certificates found: {e}"))?
+                .https_or_http()
+                .enable_http1()
+                .build();
+            Ok(Client::builder(TokioExecutor::new()).build(https))
+        })
+        .as_ref()
+        .map_err(|e| StackureError::Network(e.clone()))
 }
 
 #[derive(Default)]
@@ -62,14 +82,17 @@ struct CallOpts<'a> {
 }
 
 async fn send_once(
+    client: &HttpsClient,
     method: &Method,
     url: &str,
     o: &CallOpts<'_>,
+    secret: &str,
 ) -> Result<(u16, Bytes), StackureError> {
     let mut builder = Request::builder().method(method).uri(url);
     if o.body.is_some() {
         builder = builder.header("content-type", "application/json");
     }
+    builder = builder.header("x-app-secret", secret);
 
     let cookie = if o.token.is_empty() {
         String::new()
@@ -91,7 +114,7 @@ async fn send_once(
         .body(body)
         .map_err(|e| StackureError::Network(format!("failed to create request: {e}")))?;
 
-    let response = client()
+    let response = client
         .request(req)
         .await
         .map_err(|e| StackureError::Network(format!("network request failed: {e}")))?;
@@ -111,36 +134,36 @@ async fn request(
     path: &str,
     o: CallOpts<'_>,
 ) -> Result<serde_json::Value, StackureError> {
+    let deadline = tokio::time::Instant::now() + REQUEST_TIMEOUT;
+    let secret = app_secret()?;
+    let client = client()?;
     let url = match &o.query {
         Some(q) => format!("{}{path}?{q}", base_url()),
         None => format!("{}{path}", base_url()),
     };
 
-    let mut last: Option<StackureError> = None;
-    for attempt in 0..=MAX_RETRIES {
-        if attempt > 0 {
-            tokio::time::sleep(RETRY_DELAY).await;
-        }
-
-        match tokio::time::timeout(REQUEST_TIMEOUT, send_once(method, &url, &o)).await {
-            Err(_) => {
-                return Err(StackureError::Timeout(format!(
+    let mut attempt = 0;
+    loop {
+        let res = tokio::time::timeout_at(deadline, send_once(client, method, &url, &o, &secret))
+            .await
+            .map_err(|_| {
+                StackureError::Timeout(format!(
                     "request timed out after {}s",
                     REQUEST_TIMEOUT.as_secs()
-                )));
-            }
-            Ok(Err(e)) => last = Some(e),
-            Ok(Ok((status, bytes))) => {
-                if status >= 500 && attempt < MAX_RETRIES {
-                    last = Some(StackureError::Network(format!("server error ({status})")));
-                    continue;
-                }
+                ))
+            })?;
+        let retry = attempt < MAX_RETRIES
+            && deadline.saturating_duration_since(tokio::time::Instant::now()) > RETRY_DELAY;
+        match res {
+            Ok((status, bytes)) if status < 500 || !retry => {
                 return handle_response(status, &bytes);
             }
+            Err(e) if !retry => return Err(e),
+            _ => {}
         }
+        attempt += 1;
+        tokio::time::sleep(RETRY_DELAY).await;
     }
-
-    Err(last.unwrap_or_else(|| StackureError::Network("request failed after retries".into())))
 }
 
 fn handle_response(status: u16, bytes: &[u8]) -> Result<serde_json::Value, StackureError> {
@@ -206,15 +229,9 @@ pub fn cookie(parts: &Parts, name: &str) -> String {
         .split(';')
         .find_map(|part| {
             let (key, value) = part.split_once('=')?;
-            (key.trim() == name).then(|| value.trim().to_string())
+            (key.trim() == name).then(|| value.trim().trim_matches('"').to_string())
         })
         .unwrap_or_default()
-}
-
-/// Read a single query-string parameter, or `""` if absent.
-#[must_use]
-pub fn query_param(parts: &Parts, name: &str) -> String {
-    form_value(parts.uri.query().unwrap_or_default(), name)
 }
 
 /// Read `name` out of an `application/x-www-form-urlencoded` string.
@@ -260,17 +277,6 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// The session token: handoff query parameter first, then the cookie.
-#[must_use]
-pub fn session_token(parts: &Parts) -> String {
-    let from_query = query_param(parts, TOKEN_PARAM);
-    if from_query.is_empty() {
-        cookie(parts, SESSION_COOKIE)
-    } else {
-        from_query
-    }
-}
-
 /// Send a passwordless sign-in email.
 ///
 /// # Errors
@@ -313,10 +319,22 @@ pub async fn send_magic_link(
 ///
 /// Returns [`StackureError`] on invalid input, or any transport or API failure.
 pub async fn validate_session(app_id: &str, parts: &Parts) -> Result<Session, StackureError> {
+    validate_token(app_id, &cookie(parts, SESSION_COOKIE), parts).await
+}
+
+/// Validate an explicit session `token` for the browser that sent `parts`.
+///
+/// # Errors
+///
+/// Returns [`StackureError`] on invalid input, or any transport or API failure.
+pub async fn validate_token(
+    app_id: &str,
+    token: &str,
+    parts: &Parts,
+) -> Result<Session, StackureError> {
     validate_uuid(app_id, "App ID")?;
 
-    let token = session_token(parts);
-    if !is_uuid(&token) {
+    if !is_uuid(token) {
         return Ok(Session {
             sign_in_url: format!("{}/sign-in/magic-link?app_id={app_id}", base_url()),
             ..Session::default()
@@ -328,7 +346,7 @@ pub async fn validate_session(app_id: &str, parts: &Parts) -> Result<Session, St
         "/api/public/auth/session/validate",
         CallOpts {
             query: Some(format!("app_id={app_id}")),
-            token: &token,
+            token,
             ua: parts
                 .headers
                 .get("user-agent")

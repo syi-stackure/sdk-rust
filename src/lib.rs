@@ -1,7 +1,7 @@
 //! Stackure is the Rust SDK for the Stackure authentication API.
 //!
 //! Stackure provides passwordless B2B authentication. This SDK wraps the
-//! public API behind five free functions and a tower middleware.
+//! public API behind seven free functions and a tower middleware.
 //!
 //! # Quickstart
 //!
@@ -58,20 +58,21 @@
 //!
 //! Stackure's session cookie is scoped to the Stackure host and is never
 //! visible to your app. After a successful magic-link sign-in, Stackure hands
-//! the browser back to the app's registered URL with a `session_token`, either
-//! as a POST form field or as a query parameter.
+//! the browser back to the app's registered URL with a `session_token` POST
+//! form field: an app-scoped session token valid only for this app, accepted
+//! by the validate endpoint for your app ID and never by Stackure itself.
 //!
-//! The [`auth`] layer consumes both automatically: it stores the token in a
-//! cookie on your own domain and redirects to the same URL with the parameter
-//! stripped, so the token does not linger in the address bar.
+//! The [`auth`] layer consumes it automatically: it validates the token, stores
+//! it in a cookie on your own domain and redirects to the same URL as a GET.
+//! Invalid tokens are ignored, and handoff bodies over 4 KB are ignored (treated
+//! as no token).
 //!
 //! # Session binding
 //!
-//! Stackure binds each session to the browser's user agent and IP address.
-//! Because the SDK validates from your server rather than the browser, it
-//! forwards the original `User-Agent` and `X-Forwarded-For` on every
-//! validation call. Your app must therefore see the real client IP: if it sits
-//! behind a proxy or CDN, ensure that layer sets `X-Forwarded-For` correctly.
+//! Sessions are not bound to the browser's user agent or IP address. The SDK
+//! still forwards the original `User-Agent` and `X-Forwarded-For` on every
+//! validation call, but they are informational only; validation does not
+//! depend on them.
 //!
 //! Every request with a session token is validated against Stackure, so revoking
 //! a session takes effect immediately. Requests without a well-formed token get
@@ -85,12 +86,21 @@
 //!
 //! # Configuration
 //!
-//! The SDK has no configuration API. Point it at a non-production environment
-//! by setting the `STACKURE_BASE_URL` environment variable before the first
-//! call.
+//! `STACKURE_APP_SECRET` must be set to the app secret shown when the app was
+//! registered (or last rotated) in Stackure. It is sent as the `X-App-Secret`
+//! header on every call; the first call that actually reaches Stackure fails
+//! with [`StackureError::Validation`] when it is unset. `STACKURE_BASE_URL`
+//! overrides the API host (default `https://stackure.com`).
 //!
-//! Retry-on-5xx (one retry after 500ms) and the 2-second request timeout are
-//! hard-coded. Timeouts are never retried.
+//! A newly registered app is not usable by anyone, even its creator, until it
+//! is shared with the organization or assigned to a team in Stackure. Do that
+//! before testing sign-in.
+//!
+//! Every SDK call has one 2-second wall-clock deadline covering connect,
+//! headers, body and the single retry. The SDK retries once, after 500 ms, on
+//! a 5xx response or a connection failure, and only if more than 500 ms of the
+//! deadline remain. A timeout, including while reading the body, surfaces as
+//! [`StackureError::Timeout`] and is never retried.
 //!
 //! # Errors
 //!
