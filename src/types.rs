@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 pub struct User {
     /// Unique identifier for the user.
     pub user_id: String,
+    /// Identifier of the organization the user belongs to.
+    pub account_id: String,
     /// User's email address.
     pub user_email: String,
     /// User's first name.
