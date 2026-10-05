@@ -9,7 +9,8 @@ use std::fmt;
 /// expose as `.code`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StackureError {
-    /// Input validation failed before a request was made, or `STACKURE_APP_SECRET` is not set.
+    /// Input validation failed before a request was made, or
+    /// `STACKURE_APP_ID` or `STACKURE_APP_SECRET` is not set.
     Validation(String),
     /// The API returned 401 Unauthorized.
     Auth(String),

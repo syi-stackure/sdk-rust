@@ -139,6 +139,7 @@ fn platform() -> &'static Platform {
         // environment.
         unsafe {
             std::env::set_var("STACKURE_BASE_URL", &base);
+            std::env::set_var("STACKURE_APP_ID", APP_ID);
             std::env::set_var("STACKURE_APP_SECRET", APP_SECRET);
         }
         let runtime = Runtime::new().unwrap();
@@ -487,7 +488,7 @@ fn other_calls_send_the_configured_app_secret() {
     let (parts, ()) = signed_in(Request::get("/")).body(()).unwrap().into_parts();
     let task = platform
         .runtime
-        .spawn(async move { stackure::validate_session(APP_ID, &parts).await });
+        .spawn(async move { stackure::validate_session(&parts).await });
     let _ = platform.runtime.block_on(task).unwrap();
 
     let calls = std::mem::take(&mut *recorded());

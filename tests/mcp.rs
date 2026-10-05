@@ -130,6 +130,7 @@ fn platform() -> &'static Platform {
         // environment.
         unsafe {
             std::env::set_var("STACKURE_BASE_URL", &base);
+            std::env::set_var("STACKURE_APP_ID", APP_ID);
             std::env::set_var("STACKURE_APP_SECRET", APP_SECRET);
         }
         let runtime = Runtime::new().unwrap();
@@ -164,7 +165,7 @@ fn send(permissions: &[&str], request: Request<Body>) -> (Response<String>, Vec<
 
     let mut app = Router::new()
         .fallback(tool)
-        .layer(stackure::mcp(APP_ID, permissions));
+        .layer(stackure::mcp(permissions));
     let task = platform.runtime.spawn(async move {
         let (parts, body) = app.call(request).await.unwrap().into_parts();
         let body = axum::body::to_bytes(body, usize::MAX).await.unwrap();
@@ -447,9 +448,7 @@ fn nested_mount_reports_the_public_path() {
 
     let mut app = Router::new().nest(
         "/api",
-        Router::new()
-            .fallback(tool)
-            .layer(stackure::mcp(APP_ID, &[])),
+        Router::new().fallback(tool).layer(stackure::mcp(&[])),
     );
     let request = Request::post("/api/mcp")
         .header("host", "app.example.com")

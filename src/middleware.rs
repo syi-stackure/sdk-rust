@@ -27,14 +27,14 @@ use crate::types::{User, VerifyError, VerifyResult};
 ///
 /// ```no_run
 /// # async fn example(parts: &http::request::Parts) {
-/// let result = stackure::verify("7f3c1a2e-9b4d-4e6f-8a1b-2c3d4e5f6071", parts, &["can_approve_invoice"]).await;
+/// let result = stackure::verify(parts, &["can_approve_invoice"]).await;
 /// if result.authenticated {
 ///     println!("{}", result.user.unwrap().user_email);
 /// }
 /// # }
 /// ```
-pub async fn verify(app_id: &str, parts: &Parts, permissions: &[&str]) -> VerifyResult {
-    let session = match validate_session(app_id, parts).await {
+pub async fn verify(parts: &Parts, permissions: &[&str]) -> VerifyResult {
+    let session = match validate_session(parts).await {
         Ok(session) => session,
         Err(e) => {
             eprintln!("stackure: verification error: {e}");
@@ -290,15 +290,11 @@ pub async fn logout<B: Default>(parts: &Parts) -> Response<B> {
 /// ```no_run
 /// # use axum::{Router, routing::get};
 /// # let app: Router = Router::new().route("/admin", get(|| async {}));
-/// let app = app.layer(stackure::auth(
-///     "7f3c1a2e-9b4d-4e6f-8a1b-2c3d4e5f6071",
-///     &["can_approve_invoice"],
-/// ));
+/// let app = app.layer(stackure::auth(&["can_approve_invoice"]));
 /// ```
 #[must_use]
-pub fn auth(app_id: &str, permissions: &[&str]) -> AuthLayer {
+pub fn auth(permissions: &[&str]) -> AuthLayer {
     AuthLayer {
-        app_id: Arc::from(app_id),
         permissions: permissions.iter().map(|p| (*p).to_string()).collect(),
         mcp: false,
     }
@@ -324,20 +320,19 @@ pub fn auth(app_id: &str, permissions: &[&str]) -> AuthLayer {
 /// ```no_run
 /// # use axum::{Router, routing::any};
 /// # let app: Router = Router::new().route("/mcp", any(|| async {}));
-/// let app = app.layer(stackure::mcp("7f3c1a2e-9b4d-4e6f-8a1b-2c3d4e5f6071", &[]));
+/// let app = app.layer(stackure::mcp(&[]));
 /// ```
 #[must_use]
-pub fn mcp(app_id: &str, permissions: &[&str]) -> AuthLayer {
+pub fn mcp(permissions: &[&str]) -> AuthLayer {
     AuthLayer {
         mcp: true,
-        ..auth(app_id, permissions)
+        ..auth(permissions)
     }
 }
 
 /// The tower [`Layer`] returned by [`auth`] and [`mcp`].
 #[derive(Clone, Debug)]
 pub struct AuthLayer {
-    app_id: Arc<str>,
     permissions: Arc<[String]>,
     mcp: bool,
 }
@@ -348,7 +343,6 @@ impl<S> Layer<S> for AuthLayer {
     fn layer(&self, inner: S) -> Auth<S> {
         Auth {
             inner,
-            app_id: self.app_id.clone(),
             permissions: self.permissions.clone(),
             mcp: self.mcp,
         }
@@ -359,7 +353,6 @@ impl<S> Layer<S> for AuthLayer {
 #[derive(Clone, Debug)]
 pub struct Auth<S> {
     inner: S,
-    app_id: Arc<str>,
     permissions: Arc<[String]>,
     mcp: bool,
 }
@@ -385,7 +378,6 @@ where
     fn call(&mut self, req: Request<ReqB>) -> Self::Future {
         let ready = self.inner.clone();
         let mut inner = std::mem::replace(&mut self.inner, ready);
-        let app_id = self.app_id.clone();
         let permissions = self.permissions.clone();
         let mcp = self.mcp;
 
@@ -393,7 +385,7 @@ where
             let (mut parts, body) = req.into_parts();
 
             if mcp {
-                let session = match validate_mcp(&app_id, &mcp_url(&parts), &parts).await {
+                let session = match validate_mcp(&mcp_url(&parts), &parts).await {
                     Ok(session) => session,
                     Err(e) => {
                         eprintln!("stackure: verification error: {e}");
@@ -436,7 +428,7 @@ where
             };
 
             if !token.is_empty()
-                && validate_token(&app_id, &token, &parts)
+                && validate_token(&token, &parts)
                     .await
                     .is_ok_and(|s| s.authenticated)
             {
@@ -452,7 +444,7 @@ where
             }
 
             let permissions: Vec<&str> = permissions.iter().map(String::as_str).collect();
-            let result = verify(&app_id, &parts, &permissions).await;
+            let result = verify(&parts, &permissions).await;
 
             if let Some(error) = result.error.filter(|_| !result.authenticated) {
                 if error.code == 401 && accepts_html(&parts) && !error.sign_in_url.is_empty() {

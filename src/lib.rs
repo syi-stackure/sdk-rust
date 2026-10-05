@@ -10,12 +10,10 @@
 //! ```no_run
 //! # use axum::{Router, routing::get};
 //! # let app: Router = Router::new().route("/admin", get(|| async {}));
-//! let app = app.layer(stackure::auth(APP_ID, &["can_approve_invoice"]));
-//! # const APP_ID: &str = "7f3c1a2e-9b4d-4e6f-8a1b-2c3d4e5f6071";
+//! let app = app.layer(stackure::auth(&["can_approve_invoice"]));
 //! ```
 //!
-//! `APP_ID` is the app's UUID as registered in Stackure. The layer works in
-//! any tower stack — axum, tonic, or hyper.
+//! The layer works in any tower stack — axum, tonic, or hyper.
 //!
 //! Access the authenticated user inside a handler:
 //!
@@ -29,8 +27,7 @@
 //!
 //! ```no_run
 //! # async fn example(parts: &http::request::Parts) {
-//! # const APP_ID: &str = "7f3c1a2e-9b4d-4e6f-8a1b-2c3d4e5f6071";
-//! let result = stackure::verify(APP_ID, parts, &[]).await;
+//! let result = stackure::verify(parts, &[]).await;
 //! if result.authenticated {
 //!     // use result.user
 //! }
@@ -41,8 +38,7 @@
 //!
 //! ```no_run
 //! # async fn example() {
-//! # const APP_ID: &str = "7f3c1a2e-9b4d-4e6f-8a1b-2c3d4e5f6071";
-//! let response = stackure::send_magic_link("user@example.com", Some(APP_ID)).await;
+//! let response = stackure::send_magic_link("user@example.com").await;
 //! # }
 //! ```
 //!
@@ -98,8 +94,7 @@
 //! ```no_run
 //! # use axum::{Router, routing::any};
 //! # let app: Router = Router::new().route("/mcp", any(|| async {}));
-//! let app = app.layer(stackure::mcp(APP_ID, &[]));
-//! # const APP_ID: &str = "7f3c1a2e-9b4d-4e6f-8a1b-2c3d4e5f6071";
+//! let app = app.layer(stackure::mcp(&[]));
 //! ```
 //!
 //! AI clients such as Claude, Claude Code, VS Code and Cursor sign users in
@@ -116,11 +111,13 @@
 //!
 //! # Configuration
 //!
-//! `STACKURE_APP_SECRET` must be set to the app secret shown when the app was
-//! registered (or last rotated) in Stackure. It is sent as the `X-App-Secret`
-//! header on every call except the sign-out made by [`logout`], which carries
-//! the user's session token instead; the first call that needs it fails with
-//! [`StackureError::Validation`] when it is unset. `STACKURE_BASE_URL`
+//! `STACKURE_APP_ID` must be set to the app's UUID, shown on the app page in
+//! Stackure, and `STACKURE_APP_SECRET` to the app secret shown when the app
+//! was registered (or last rotated) in Stackure. The secret is sent as the
+//! `X-App-Secret` header on every call except the sign-out made by
+//! [`logout`], which carries the user's session token instead. The first call
+//! that needs either fails with [`StackureError::Validation`] when it is
+//! unset, or when `STACKURE_APP_ID` is not a UUID. `STACKURE_BASE_URL`
 //! overrides the API host (default `https://stackure.com`).
 //!
 //! A newly registered app is not usable by anyone, even its creator, until it
