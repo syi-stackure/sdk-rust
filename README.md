@@ -24,7 +24,7 @@ Requires Rust 2024 edition.
 export STACKURE_APP_SECRET=...   # from the app page in Stackure, shown once
 ```
 
-Sent as `X-App-Secret` on every call. The first call that actually reaches Stackure fails with `StackureError::Validation` when it is unset. `STACKURE_BASE_URL` optionally overrides the API host.
+Sent as `X-App-Secret` on every call except the sign-out made by `logout`, which carries the user's session token instead. The first call that needs it fails with `StackureError::Validation` when it is unset. `STACKURE_BASE_URL` optionally overrides the API host.
 
 A newly registered app is not usable by anyone, even its creator, until it is shared with the organization or assigned to a team in Stackure. Do that before testing sign-in.
 
@@ -102,17 +102,37 @@ let response = stackure::send_magic_link("user@example.com", Some(APP_ID)).await
 ## Log out
 
 ```rust
-let response: Response<Body> = stackure::logout(&parts);
+async fn logout(parts: Parts) -> Response<Body> {
+    stackure::logout(&parts).await
+}
+
+let app = Router::new().route("/logout", any(logout));
 ```
 
-Returns a 303 that clears the app's cookie and redirects to Stackure's
-sign-out.
+```html
+<form method="post" action="/logout"><button>Sign out</button></form>
+```
+
+Mount it for every method on the logout path, as `any` does here. Trigger it
+with a form or button that POSTs from the app's own page; a link or any other
+request is sent to Stackure's sign-out page, where the user confirms.
+
+A request from the app's own page is a POST with `Sec-Fetch-Site: same-origin`
+or, when that header is absent, with an `Origin` whose host and port match
+`Host` and whose scheme is `https` if the request arrived over HTTPS. A request
+that repeats `Sec-Fetch-Site`, `Origin` or `Host` never counts. It ends the
+user's access everywhere with a server-side call to Stackure, clears the app's
+cookie and returns a 303 to Stackure. If the call fails, the 303 goes to
+Stackure's sign-out page instead, where the user can finish signing out.
+
+`logout` is asynchronous: awaiting it yields the `Response<B>`, never an error.
 
 ## Errors
 
-Everything except `verify` returns `StackureError`. Match on the variant, or
-call `.code()` for the same category string the other Stackure SDKs expose as
-`.code`:
+Everything except `verify` and `logout` returns `StackureError`. `logout` never
+returns an error: a failed sign-out call still ends in a redirect. Match on the
+variant, or call `.code()` for the same category string the other Stackure SDKs
+expose as `.code`:
 
 ```rust
 use stackure::StackureError;

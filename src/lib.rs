@@ -46,12 +46,19 @@
 //! # }
 //! ```
 //!
-//! Log the user out:
+//! Log the user out, ending their access everywhere. Mount it for every method
+//! on the logout path. Trigger it with a form or button that POSTs from the
+//! app's own page; a link or any other request is sent to Stackure's sign-out
+//! page, where the user confirms. Awaiting it yields the redirect response,
+//! never an error:
 //!
 //! ```no_run
-//! # fn example(parts: &http::request::Parts) -> http::Response<axum::body::Body> {
-//! stackure::logout(parts)
-//! # }
+//! # use axum::{Router, routing::any};
+//! async fn logout(parts: http::request::Parts) -> axum::response::Response {
+//!     stackure::logout(&parts).await
+//! }
+//!
+//! let app: Router = Router::new().route("/logout", any(logout));
 //! ```
 //!
 //! # Sign-in handoff
@@ -88,8 +95,9 @@
 //!
 //! `STACKURE_APP_SECRET` must be set to the app secret shown when the app was
 //! registered (or last rotated) in Stackure. It is sent as the `X-App-Secret`
-//! header on every call; the first call that actually reaches Stackure fails
-//! with [`StackureError::Validation`] when it is unset. `STACKURE_BASE_URL`
+//! header on every call except the sign-out made by [`logout`], which carries
+//! the user's session token instead; the first call that needs it fails with
+//! [`StackureError::Validation`] when it is unset. `STACKURE_BASE_URL`
 //! overrides the API host (default `https://stackure.com`).
 //!
 //! A newly registered app is not usable by anyone, even its creator, until it
@@ -104,9 +112,10 @@
 //!
 //! # Errors
 //!
-//! Every function except [`verify`] returns [`StackureError`]. Match on the
-//! variant, or call [`StackureError::code`] for the same lowercase category
-//! string the other Stackure SDKs expose as `.code`.
+//! Every function except [`verify`] and [`logout`] returns [`StackureError`].
+//! [`logout`] never returns an error: a failed sign-out call still ends in a
+//! redirect. Match on the variant, or call [`StackureError::code`] for the same
+//! lowercase category string the other Stackure SDKs expose as `.code`.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

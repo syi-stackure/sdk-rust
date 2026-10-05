@@ -77,6 +77,8 @@ struct CallOpts<'a> {
     body: Option<Vec<u8>>,
     query: Option<String>,
     token: &'a str,
+    bearer: &'a str,
+    status_only: bool,
     ua: &'a str,
     ip: &'a str,
 }
@@ -91,15 +93,25 @@ async fn send_once(
     let mut builder = Request::builder().method(method).uri(url);
     if o.body.is_some() {
         builder = builder.header("content-type", "application/json");
+    } else if method == Method::POST {
+        builder = builder.header("content-length", "0");
     }
-    builder = builder.header("x-app-secret", secret);
+    if !secret.is_empty() {
+        builder = builder.header("x-app-secret", secret);
+    }
 
     let cookie = if o.token.is_empty() {
         String::new()
     } else {
         format!("{SESSION_COOKIE}={}", o.token)
     };
+    let bearer = if o.bearer.is_empty() {
+        String::new()
+    } else {
+        format!("Bearer {}", o.bearer)
+    };
     for (name, value) in [
+        ("authorization", bearer.as_str()),
         ("user-agent", o.ua),
         ("x-forwarded-for", o.ip),
         ("cookie", cookie.as_str()),
@@ -120,6 +132,9 @@ async fn send_once(
         .map_err(|e| StackureError::Network(format!("network request failed: {e}")))?;
 
     let status = response.status().as_u16();
+    if o.status_only {
+        return Ok((status, Bytes::new()));
+    }
     let bytes = response
         .into_body()
         .collect()
@@ -129,13 +144,13 @@ async fn send_once(
     Ok((status, bytes))
 }
 
-async fn request(
-    method: &Method,
-    path: &str,
-    o: CallOpts<'_>,
-) -> Result<serde_json::Value, StackureError> {
+async fn send(method: &Method, path: &str, o: &CallOpts<'_>) -> Result<Bytes, StackureError> {
     let deadline = tokio::time::Instant::now() + REQUEST_TIMEOUT;
-    let secret = app_secret()?;
+    let secret = if o.bearer.is_empty() {
+        app_secret()?
+    } else {
+        String::new()
+    };
     let client = client()?;
     let url = match &o.query {
         Some(q) => format!("{}{path}?{q}", base_url()),
@@ -144,7 +159,7 @@ async fn request(
 
     let mut attempt = 0;
     loop {
-        let res = tokio::time::timeout_at(deadline, send_once(client, method, &url, &o, &secret))
+        let res = tokio::time::timeout_at(deadline, send_once(client, method, &url, o, &secret))
             .await
             .map_err(|_| {
                 StackureError::Timeout(format!(
@@ -156,7 +171,7 @@ async fn request(
             && deadline.saturating_duration_since(tokio::time::Instant::now()) > RETRY_DELAY;
         match res {
             Ok((status, bytes)) if status < 500 || !retry => {
-                return handle_response(status, &bytes);
+                return check_status(status, &bytes).map(|()| bytes);
             }
             Err(e) if !retry => return Err(e),
             _ => {}
@@ -166,22 +181,31 @@ async fn request(
     }
 }
 
-fn handle_response(status: u16, bytes: &[u8]) -> Result<serde_json::Value, StackureError> {
-    let text = String::from_utf8_lossy(bytes);
-    if !(200..300).contains(&status) {
-        let body = if text.is_empty() {
-            "unknown error"
-        } else {
-            &text
-        };
-        return Err(match status {
-            401 => StackureError::Auth(body.to_string()),
-            403 => StackureError::Forbidden(body.to_string()),
-            _ => StackureError::Network(format!("api error ({status}): {body}")),
-        });
-    }
-    serde_json::from_str(&text)
+async fn request(
+    method: &Method,
+    path: &str,
+    o: CallOpts<'_>,
+) -> Result<serde_json::Value, StackureError> {
+    let bytes = send(method, path, &o).await?;
+    serde_json::from_str(&String::from_utf8_lossy(&bytes))
         .map_err(|_| StackureError::Network("invalid JSON response from server".into()))
+}
+
+fn check_status(status: u16, bytes: &[u8]) -> Result<(), StackureError> {
+    if (200..300).contains(&status) {
+        return Ok(());
+    }
+    let text = String::from_utf8_lossy(bytes);
+    let body = if text.is_empty() {
+        "unknown error"
+    } else {
+        &text
+    };
+    Err(match status {
+        401 => StackureError::Auth(body.to_string()),
+        403 => StackureError::Forbidden(body.to_string()),
+        _ => StackureError::Network(format!("api error ({status}): {body}")),
+    })
 }
 
 /// The client's address: first `X-Forwarded-For` entry, else the peer address.
@@ -360,4 +384,42 @@ pub async fn validate_token(
 
     serde_json::from_value(data)
         .map_err(|_| StackureError::Network("unexpected API response format".into()))
+}
+
+/// End the access of the user behind the request's session token, everywhere.
+///
+/// A request without a well-formed session token returns `Ok` without a
+/// Stackure call. A 2xx status alone is success: the response body is never
+/// read. The call runs on its own task, so it completes even if the caller is
+/// dropped while it is in flight.
+pub(crate) async fn sign_out(parts: &Parts) -> Result<(), StackureError> {
+    let token = cookie(parts, SESSION_COOKIE);
+    if !is_uuid(&token) {
+        return Ok(());
+    }
+    let ua = parts
+        .headers
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    let ip = client_ip(parts);
+
+    tokio::spawn(async move {
+        send(
+            &Method::POST,
+            "/api/public/auth/sign-out",
+            &CallOpts {
+                bearer: &token,
+                status_only: true,
+                ua: &ua,
+                ip: &ip,
+                ..CallOpts::default()
+            },
+        )
+        .await
+        .map(drop)
+    })
+    .await
+    .unwrap_or_else(|e| Err(StackureError::Network(format!("sign-out task failed: {e}"))))
 }

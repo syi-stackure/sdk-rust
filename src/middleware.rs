@@ -13,7 +13,8 @@ use http_body_util::{BodyExt, Limited};
 use tower::{Layer, Service};
 
 use crate::client::{
-    SESSION_COOKIE, TOKEN_PARAM, base_url, form_value, origin, validate_session, validate_token,
+    SESSION_COOKIE, TOKEN_PARAM, base_url, form_value, origin, sign_out, validate_session,
+    validate_token,
 };
 use crate::types::{User, VerifyError, VerifyResult};
 
@@ -158,22 +159,77 @@ fn error_body(error: &VerifyError) -> Bytes {
     )
 }
 
-/// Clear the app's session cookie and redirect to Stackure's sign-out, which
-/// revokes the session.
+fn same_origin_post(parts: &Parts) -> bool {
+    let header = |name: &str| {
+        parts
+            .headers
+            .get(name)
+            .map(|v| v.to_str().unwrap_or_default())
+    };
+    let repeated = |name: &str| parts.headers.get_all(name).iter().nth(1).is_some();
+    if parts.method != http::Method::POST
+        || ["sec-fetch-site", "origin", "host"]
+            .into_iter()
+            .any(repeated)
+    {
+        return false;
+    }
+    if let Some(site) = header("sec-fetch-site") {
+        return site == "same-origin";
+    }
+    let host = header("host").or_else(|| parts.uri.authority().map(http::uri::Authority::as_str));
+    header("origin")
+        .and_then(|origin| origin.split_once("://"))
+        .zip(host)
+        .is_some_and(|((scheme, origin), host)| {
+            (scheme == "https" || !is_https(parts))
+                && !host.is_empty()
+                && origin.eq_ignore_ascii_case(host)
+        })
+}
+
+/// End the user's access everywhere with a server-side call to Stackure,
+/// clear the app's session cookie and redirect to Stackure.
+///
+/// Mount it for every method on the logout path. Trigger it with a form or
+/// button that POSTs from the app's own page; a link or any other request is
+/// sent to Stackure's sign-out page, where the user confirms, with no call
+/// made and the cookie left in place.
+///
+/// A request counts as coming from the app's own page when it is a POST with
+/// `Sec-Fetch-Site: same-origin` or, when that header is absent, with an
+/// `Origin` whose host and port match `Host` and whose scheme is `https` if
+/// the request arrived over HTTPS. A request that repeats `Sec-Fetch-Site`,
+/// `Origin` or `Host` never counts.
+///
+/// If the call fails, the redirect goes to Stackure's sign-out page instead,
+/// where the user can finish signing out.
+///
+/// Asynchronous: awaiting it yields the 303 [`Response`], never an error.
 ///
 /// # Example
 ///
 /// ```no_run
-/// # fn example(parts: &http::request::Parts) -> http::Response<axum::body::Body> {
-/// stackure::logout(parts)
-/// # }
+/// # use axum::{Router, routing::any};
+/// async fn logout(parts: http::request::Parts) -> axum::response::Response {
+///     stackure::logout(&parts).await
+/// }
+///
+/// let app: Router = Router::new().route("/logout", any(logout));
 /// ```
 #[must_use]
-pub fn logout<B: Default>(parts: &Parts) -> Response<B> {
-    Response::builder()
-        .status(StatusCode::SEE_OTHER)
-        .header("location", format!("{}/signout", base_url()))
-        .header("set-cookie", cookie_header("", is_https(parts), Some(0)))
+pub async fn logout<B: Default>(parts: &Parts) -> Response<B> {
+    let mut response = Response::builder().status(StatusCode::SEE_OTHER);
+    let mut path = "/signout";
+    if same_origin_post(parts) {
+        match sign_out(parts).await {
+            Ok(()) => path = "/",
+            Err(e) => eprintln!("stackure: sign-out error: {e}"),
+        }
+        response = response.header("set-cookie", cookie_header("", is_https(parts), Some(0)));
+    }
+    response
+        .header("location", format!("{}{path}", base_url()))
         .body(B::default())
         .expect("logout response is always valid")
 }
