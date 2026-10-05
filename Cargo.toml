@@ -28,7 +28,7 @@ default = ["axum"]
 axum = ["dep:axum"]
 
 [dependencies]
-axum = { version = "0.8", optional = true, default-features = false, features = ["tokio"] }
+axum = { version = "0.8", optional = true, default-features = false, features = ["tokio", "original-uri"] }
 hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "tokio", "http1"] }
 hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "native-tokio", "ring", "tls12"] }

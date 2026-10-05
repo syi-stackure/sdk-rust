@@ -53,6 +53,22 @@ In axum you can also take an `Extension<User>` directly.
 - Browser requests get redirected to sign-in
 - The sign-in handoff is automatic: Stackure POSTs a `session_token` (an app-scoped session token valid only for this app) back to your app, the layer validates it and stores it as a cookie on your domain. Handoff bodies over 4 KB are ignored
 
+## MCP
+
+```rust
+use stackure::mcp;
+
+let app = Router::new()
+    .route("/mcp", any(handler))
+    .layer(mcp(APP_ID, &[]));
+```
+
+AI clients such as Claude, Claude Code, VS Code and Cursor sign users in through Stackure. This one line checks every MCP request in real time with the same app secret; there is no extra setup. The MCP endpoint must be served from the same site as the app's registered URL unless an MCP URL is set for the app in Stackure.
+
+- Only `Authorization: Bearer` is read; cookies are ignored
+- The user is attached exactly as `auth` does
+- Not signed in gets a 401 with `WWW-Authenticate`, a missing permission a 403, a failed check a 503, all JSON and never a redirect
+
 ## Requirements
 
 Sessions are not bound to the browser's user agent or IP. The SDK still
