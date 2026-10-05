@@ -46,6 +46,15 @@ fn app_secret() -> Result<String, StackureError> {
         .ok_or_else(|| StackureError::Validation("STACKURE_APP_SECRET is not set".into()))
 }
 
+fn app_id() -> Result<String, StackureError> {
+    let v = env::var("STACKURE_APP_ID")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| StackureError::Validation("STACKURE_APP_ID is not set".into()))?;
+    validate_uuid(&v, "STACKURE_APP_ID")?;
+    Ok(v)
+}
+
 pub(crate) fn origin() -> String {
     base_url()
         .parse::<http::Uri>()
@@ -326,22 +335,14 @@ fn percent_encode(s: &str) -> String {
     })
 }
 
-/// Send a passwordless sign-in email.
+/// Send a passwordless sign-in email for the app in `STACKURE_APP_ID`.
 ///
 /// # Errors
 ///
 /// Returns [`StackureError`] on invalid input, or any transport or API failure.
-pub async fn send_magic_link(
-    email: &str,
-    app_id: Option<&str>,
-) -> Result<MagicLinkResponse, StackureError> {
+pub async fn send_magic_link(email: &str) -> Result<MagicLinkResponse, StackureError> {
     validate_email(email)?;
-
-    let mut body = serde_json::json!({ "user_email": email });
-    if let Some(id) = app_id.filter(|s| !s.is_empty()) {
-        validate_uuid(id, "App ID")?;
-        body["app_id"] = serde_json::Value::String(id.to_string());
-    }
+    let body = serde_json::json!({ "user_email": email, "app_id": app_id()? });
 
     let data = request(
         &Method::POST,
@@ -367,8 +368,8 @@ pub async fn send_magic_link(
 /// # Errors
 ///
 /// Returns [`StackureError`] on invalid input, or any transport or API failure.
-pub async fn validate_session(app_id: &str, parts: &Parts) -> Result<Session, StackureError> {
-    validate_token(app_id, &cookie(parts, SESSION_COOKIE), parts).await
+pub async fn validate_session(parts: &Parts) -> Result<Session, StackureError> {
+    validate_token(&cookie(parts, SESSION_COOKIE), parts).await
 }
 
 /// Validate an explicit session `token` for the browser that sent `parts`.
@@ -376,12 +377,8 @@ pub async fn validate_session(app_id: &str, parts: &Parts) -> Result<Session, St
 /// # Errors
 ///
 /// Returns [`StackureError`] on invalid input, or any transport or API failure.
-pub async fn validate_token(
-    app_id: &str,
-    token: &str,
-    parts: &Parts,
-) -> Result<Session, StackureError> {
-    validate_uuid(app_id, "App ID")?;
+pub async fn validate_token(token: &str, parts: &Parts) -> Result<Session, StackureError> {
+    let app_id = app_id()?;
 
     if !is_uuid(token) {
         return Ok(Session {
@@ -425,12 +422,8 @@ pub(crate) struct McpSession {
 /// The call is made with or without a well-formed credential, so a caller who
 /// is not signed in always gets the `WWW-Authenticate` challenge. Cookies are
 /// never sent.
-pub(crate) async fn validate_mcp(
-    app_id: &str,
-    url: &str,
-    parts: &Parts,
-) -> Result<McpSession, StackureError> {
-    validate_uuid(app_id, "App ID")?;
+pub(crate) async fn validate_mcp(url: &str, parts: &Parts) -> Result<McpSession, StackureError> {
+    let app_id = app_id()?;
 
     let data = request(
         &Method::GET,

@@ -16,6 +16,7 @@ fn refused_connection_is_unavailable() {
     // do not exist yet, so nothing else is reading the environment.
     unsafe {
         std::env::set_var("STACKURE_BASE_URL", format!("http://{closed}"));
+        std::env::set_var("STACKURE_APP_ID", "7f3c1a2e-9b4d-4e6f-8a1b-2c3d4e5f6071");
         std::env::set_var("STACKURE_APP_SECRET", "app-secret-under-test");
     }
 
@@ -29,7 +30,7 @@ fn refused_connection_is_unavailable() {
         .unwrap();
     let mut app = Router::new()
         .fallback(|| async { "reached the MCP route" })
-        .layer(stackure::mcp("7f3c1a2e-9b4d-4e6f-8a1b-2c3d4e5f6071", &[]));
+        .layer(stackure::mcp(&[]));
     let runtime = Runtime::new().unwrap();
     let task = runtime.spawn(async move {
         let (parts, body) = app.call(request).await.unwrap().into_parts();

@@ -1,4 +1,5 @@
-//! `logout` when nothing is listening at the Stackure API address.
+//! `logout` when nothing is listening at the Stackure API address, and
+//! `validate_session`/`verify` with no `STACKURE_APP_ID`.
 
 use axum::http::{Request, Response, StatusCode};
 use tokio::runtime::Runtime;
@@ -14,6 +15,7 @@ fn refused_connection_redirects_to_sign_out_page() {
     // do not exist yet, so nothing else is reading the environment.
     unsafe {
         std::env::set_var("STACKURE_BASE_URL", &base);
+        std::env::remove_var("STACKURE_APP_ID");
     }
 
     let (parts, ()) = Request::post("/logout")
@@ -32,4 +34,19 @@ fn refused_connection_redirects_to_sign_out_page() {
         response.headers()["set-cookie"],
         "session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
     );
+
+    let (parts, ()) = Request::get("/").body(()).unwrap().into_parts();
+    let (session, result) = runtime.block_on(async {
+        (
+            stackure::validate_session(&parts).await,
+            stackure::verify(&parts, &[]).await,
+        )
+    });
+    assert_eq!(
+        session,
+        Err(stackure::StackureError::Validation(
+            "STACKURE_APP_ID is not set".into()
+        ))
+    );
+    assert_eq!(result.error.unwrap().code, 500);
 }

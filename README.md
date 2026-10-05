@@ -21,10 +21,11 @@ Requires Rust 2024 edition.
 ## Configure
 
 ```bash
+export STACKURE_APP_ID=...       # the app's UUID, from the app page in Stackure
 export STACKURE_APP_SECRET=...   # from the app page in Stackure, shown once
 ```
 
-Sent as `X-App-Secret` on every call except the sign-out made by `logout`, which carries the user's session token instead. The first call that needs it fails with `StackureError::Validation` when it is unset. `STACKURE_BASE_URL` optionally overrides the API host.
+The secret is sent as `X-App-Secret` on every call except the sign-out made by `logout`, which carries the user's session token instead. The first call that needs either fails with `StackureError::Validation` when it is unset, or when `STACKURE_APP_ID` is not a UUID. `STACKURE_BASE_URL` optionally overrides the API host.
 
 A newly registered app is not usable by anyone, even its creator, until it is shared with the organization or assigned to a team in Stackure. Do that before testing sign-in.
 
@@ -33,11 +34,9 @@ A newly registered app is not usable by anyone, even its creator, until it is sh
 ```rust
 use stackure::{auth, user_from_request};
 
-const APP_ID: &str = "7f3c1a2e-9b4d-4e6f-8a1b-2c3d4e5f6071"; // your app's UUID in Stackure
-
 let app = Router::new()
     .route("/admin", get(handler))
-    .layer(auth(APP_ID, &["can_approve_invoice"]));
+    .layer(auth(&["can_approve_invoice"]));
 ```
 
 Access the authenticated user in your handler:
@@ -60,7 +59,7 @@ use stackure::mcp;
 
 let app = Router::new()
     .route("/mcp", any(handler))
-    .layer(mcp(APP_ID, &[]));
+    .layer(mcp(&[]));
 ```
 
 AI clients such as Claude, Claude Code, VS Code and Cursor sign users in through Stackure. This one line checks every MCP request in real time with the same app secret; there is no extra setup. The MCP endpoint must be served from the same site as the app's registered URL unless an MCP URL is set for the app in Stackure.
@@ -95,7 +94,7 @@ never retried.
 ## Verify manually
 
 ```rust
-let result = stackure::verify(APP_ID, &parts, &["can_approve_invoice"]).await;
+let result = stackure::verify(&parts, &["can_approve_invoice"]).await;
 
 if !result.authenticated {
     let error = result.error.unwrap();
@@ -111,7 +110,7 @@ if !result.authenticated {
 ## Send a magic link
 
 ```rust
-let response = stackure::send_magic_link("user@example.com", Some(APP_ID)).await?;
+let response = stackure::send_magic_link("user@example.com").await?;
 // response.message
 ```
 
@@ -153,7 +152,7 @@ expose as `.code`:
 ```rust
 use stackure::StackureError;
 
-match stackure::send_magic_link(email, None).await {
+match stackure::send_magic_link(email).await {
     Err(StackureError::Validation(m)) => {}  // bad input
     Err(StackureError::Auth(m)) => {}        // 401 from the API
     Err(StackureError::Forbidden(m)) => {}   // 403 from the API
