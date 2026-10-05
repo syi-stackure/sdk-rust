@@ -7,14 +7,14 @@ use std::task::{Context, Poll};
 
 use bytes::Bytes;
 use http::request::Parts;
-use http::{Request, Response, StatusCode};
+use http::{HeaderValue, Request, Response, StatusCode};
 use http_body::Body;
 use http_body_util::{BodyExt, Limited};
 use tower::{Layer, Service};
 
 use crate::client::{
-    SESSION_COOKIE, TOKEN_PARAM, base_url, form_value, origin, sign_out, validate_session,
-    validate_token,
+    SESSION_COOKIE, TOKEN_PARAM, base_url, form_value, origin, sign_out, validate_mcp,
+    validate_session, validate_token,
 };
 use crate::types::{User, VerifyError, VerifyResult};
 
@@ -84,7 +84,7 @@ pub async fn verify(app_id: &str, parts: &Parts, permissions: &[&str]) -> Verify
     }
 }
 
-/// The user attached by [`auth`], or `None` if the request was not
+/// The user attached by [`auth`] or [`mcp`], or `None` if the request was not
 /// authenticated. In axum you can also take an `Extension<User>` directly.
 #[must_use]
 pub fn user_from_request(parts: &Parts) -> Option<&User> {
@@ -157,6 +157,48 @@ fn error_body(error: &VerifyError) -> Bytes {
         })
         .to_string(),
     )
+}
+
+fn mcp_url(parts: &Parts) -> String {
+    let host = parts
+        .headers
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .or_else(|| parts.uri.authority().map(http::uri::Authority::as_str))
+        .unwrap_or_default();
+    let scheme = if is_https(parts) { "https" } else { "http" };
+    #[cfg(feature = "axum")]
+    let path = parts
+        .extensions
+        .get::<axum::extract::OriginalUri>()
+        .map_or(parts.uri.path(), |u| u.0.path());
+    #[cfg(not(feature = "axum"))]
+    let path = parts.uri.path();
+    format!("{scheme}://{host}{path}")
+}
+
+fn mcp_error<B: From<Bytes>>(
+    status: StatusCode,
+    error: &str,
+    challenge: Option<&str>,
+) -> Response<B> {
+    let mut response = Response::builder()
+        .status(status)
+        .header("content-type", "application/json");
+    if let Some(challenge) = challenge {
+        response = response.header(
+            "www-authenticate",
+            HeaderValue::from_str(challenge)
+                .ok()
+                .filter(|v| !v.is_empty())
+                .unwrap_or(HeaderValue::from_static("Bearer")),
+        );
+    }
+    response
+        .body(B::from(Bytes::from(
+            serde_json::json!({ "error": error }).to_string(),
+        )))
+        .expect("error response is always valid")
 }
 
 fn same_origin_post(parts: &Parts) -> bool {
@@ -258,14 +300,46 @@ pub fn auth(app_id: &str, permissions: &[&str]) -> AuthLayer {
     AuthLayer {
         app_id: Arc::from(app_id),
         permissions: permissions.iter().map(|p| (*p).to_string()).collect(),
+        mcp: false,
     }
 }
 
-/// The tower [`Layer`] returned by [`auth`].
+/// Middleware that protects an MCP route, for any tower stack — axum, tonic,
+/// or hyper.
+///
+/// AI clients sign users in through Stackure and send the credential it issues
+/// as `Authorization: Bearer`. The layer checks that credential against
+/// Stackure on every request, with the same app secret as [`auth`]; cookies
+/// are ignored. On success the user is inserted into the request extensions,
+/// exactly as [`auth`] does. Every other answer is JSON, never a redirect and
+/// never a cookie: 401 with the `WWW-Authenticate` challenge from Stackure
+/// when not signed in, 403 when a required permission is missing, 503 when
+/// the check itself fails.
+///
+/// The MCP endpoint must be served from the same site as the app's registered
+/// URL unless an MCP URL is set for the app in Stackure.
+///
+/// # Example
+///
+/// ```no_run
+/// # use axum::{Router, routing::any};
+/// # let app: Router = Router::new().route("/mcp", any(|| async {}));
+/// let app = app.layer(stackure::mcp("7f3c1a2e-9b4d-4e6f-8a1b-2c3d4e5f6071", &[]));
+/// ```
+#[must_use]
+pub fn mcp(app_id: &str, permissions: &[&str]) -> AuthLayer {
+    AuthLayer {
+        mcp: true,
+        ..auth(app_id, permissions)
+    }
+}
+
+/// The tower [`Layer`] returned by [`auth`] and [`mcp`].
 #[derive(Clone, Debug)]
 pub struct AuthLayer {
     app_id: Arc<str>,
     permissions: Arc<[String]>,
+    mcp: bool,
 }
 
 impl<S> Layer<S> for AuthLayer {
@@ -276,6 +350,7 @@ impl<S> Layer<S> for AuthLayer {
             inner,
             app_id: self.app_id.clone(),
             permissions: self.permissions.clone(),
+            mcp: self.mcp,
         }
     }
 }
@@ -286,6 +361,7 @@ pub struct Auth<S> {
     inner: S,
     app_id: Arc<str>,
     permissions: Arc<[String]>,
+    mcp: bool,
 }
 
 type BoxFuture<T, E> = Pin<Box<dyn Future<Output = Result<T, E>> + Send>>;
@@ -311,9 +387,40 @@ where
         let mut inner = std::mem::replace(&mut self.inner, ready);
         let app_id = self.app_id.clone();
         let permissions = self.permissions.clone();
+        let mcp = self.mcp;
 
         Box::pin(async move {
             let (mut parts, body) = req.into_parts();
+
+            if mcp {
+                let session = match validate_mcp(&app_id, &mcp_url(&parts), &parts).await {
+                    Ok(session) => session,
+                    Err(e) => {
+                        eprintln!("stackure: verification error: {e}");
+                        return Ok(mcp_error(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "unavailable",
+                            None,
+                        ));
+                    }
+                };
+                let Some(user) = session.user.filter(|_| session.authenticated) else {
+                    return Ok(mcp_error(
+                        StatusCode::UNAUTHORIZED,
+                        "unauthorized",
+                        Some(&session.www_authenticate),
+                    ));
+                };
+                if !permissions.is_empty()
+                    && !permissions
+                        .iter()
+                        .any(|p| user.user_permissions.contains(p))
+                {
+                    return Ok(mcp_error(StatusCode::FORBIDDEN, "forbidden", None));
+                }
+                parts.extensions.insert(user);
+                return inner.call(Request::from_parts(parts, body)).await;
+            }
 
             let mut token = String::new();
             let body = if wants_form_token(&parts) {

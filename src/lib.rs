@@ -1,7 +1,7 @@
 //! Stackure is the Rust SDK for the Stackure authentication API.
 //!
 //! Stackure provides passwordless B2B authentication. This SDK wraps the
-//! public API behind seven free functions and a tower middleware.
+//! public API behind eight free functions and a tower middleware.
 //!
 //! # Quickstart
 //!
@@ -91,6 +91,29 @@
 //! text/html`) redirect to the sign-in URL on 401. API requests (`Accept:
 //! application/json`) receive a JSON error body.
 //!
+//! # MCP
+//!
+//! Protect an MCP route:
+//!
+//! ```no_run
+//! # use axum::{Router, routing::any};
+//! # let app: Router = Router::new().route("/mcp", any(|| async {}));
+//! let app = app.layer(stackure::mcp(APP_ID, &[]));
+//! # const APP_ID: &str = "7f3c1a2e-9b4d-4e6f-8a1b-2c3d4e5f6071";
+//! ```
+//!
+//! AI clients such as Claude, Claude Code, VS Code and Cursor sign users in
+//! through Stackure. This one line checks every MCP request in real time with
+//! the same app secret; there is no extra setup. The MCP endpoint must be
+//! served from the same site as the app's registered URL unless an MCP URL is
+//! set for the app in Stackure.
+//!
+//! The [`mcp`] layer reads only `Authorization: Bearer` and ignores cookies.
+//! It attaches the user exactly as [`auth`] does, and otherwise answers in
+//! JSON, never with a redirect or a cookie: 401 with a `WWW-Authenticate`
+//! header when not signed in, 403 when a required permission is missing, 503
+//! when the check itself fails.
+//!
 //! # Configuration
 //!
 //! `STACKURE_APP_SECRET` must be set to the app secret shown when the app was
@@ -129,5 +152,5 @@ pub mod validation;
 
 pub use client::{SESSION_COOKIE, TOKEN_PARAM, base_url, send_magic_link, validate_session};
 pub use errors::StackureError;
-pub use middleware::{Auth, AuthLayer, auth, logout, user_from_request, verify};
+pub use middleware::{Auth, AuthLayer, auth, logout, mcp, user_from_request, verify};
 pub use types::{MagicLinkResponse, Session, User, VerifyError, VerifyResult};

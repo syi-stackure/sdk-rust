@@ -14,7 +14,7 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 
 use crate::errors::StackureError;
-use crate::types::{MagicLinkResponse, Session};
+use crate::types::{MagicLinkResponse, Session, User};
 use crate::validation::{is_uuid, validate_email, validate_uuid};
 
 const DEFAULT_BASE_URL: &str = "https://stackure.com";
@@ -78,6 +78,7 @@ struct CallOpts<'a> {
     query: Option<String>,
     token: &'a str,
     bearer: &'a str,
+    with_secret: bool,
     status_only: bool,
     ua: &'a str,
     ip: &'a str,
@@ -146,7 +147,7 @@ async fn send_once(
 
 async fn send(method: &Method, path: &str, o: &CallOpts<'_>) -> Result<Bytes, StackureError> {
     let deadline = tokio::time::Instant::now() + REQUEST_TIMEOUT;
-    let secret = if o.bearer.is_empty() {
+    let secret = if o.bearer.is_empty() || o.with_secret {
         app_secret()?
     } else {
         String::new()
@@ -258,6 +259,18 @@ pub fn cookie(parts: &Parts, name: &str) -> String {
         .unwrap_or_default()
 }
 
+fn bearer(parts: &Parts) -> &str {
+    parts
+        .headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split_once(' '))
+        .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
+        .map(|(_, token)| token.trim())
+        .filter(|token| is_uuid(token))
+        .unwrap_or_default()
+}
+
 /// Read `name` out of an `application/x-www-form-urlencoded` string.
 #[must_use]
 pub fn form_value(encoded: &str, name: &str) -> String {
@@ -299,6 +312,18 @@ fn percent_decode(s: &str) -> String {
         }
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+fn percent_encode(s: &str) -> String {
+    use std::fmt::Write as _;
+    s.bytes().fold(String::new(), |mut out, b| {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(char::from(b));
+        } else {
+            let _ = write!(out, "%{b:02X}");
+        }
+        out
+    })
 }
 
 /// Send a passwordless sign-in email.
@@ -371,6 +396,49 @@ pub async fn validate_token(
         CallOpts {
             query: Some(format!("app_id={app_id}")),
             token,
+            ua: parts
+                .headers
+                .get("user-agent")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default(),
+            ip: &client_ip(parts),
+            ..CallOpts::default()
+        },
+    )
+    .await?;
+
+    serde_json::from_value(data)
+        .map_err(|_| StackureError::Network("unexpected API response format".into()))
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
+pub(crate) struct McpSession {
+    pub(crate) authenticated: bool,
+    pub(crate) user: Option<User>,
+    pub(crate) www_authenticate: String,
+}
+
+/// Validate an MCP request's `Authorization: Bearer` credential against
+/// Stackure, for the MCP endpoint at the public URL `url`.
+///
+/// The call is made with or without a well-formed credential, so a caller who
+/// is not signed in always gets the `WWW-Authenticate` challenge. Cookies are
+/// never sent.
+pub(crate) async fn validate_mcp(
+    app_id: &str,
+    url: &str,
+    parts: &Parts,
+) -> Result<McpSession, StackureError> {
+    validate_uuid(app_id, "App ID")?;
+
+    let data = request(
+        &Method::GET,
+        "/api/public/auth/session/validate",
+        CallOpts {
+            query: Some(format!("app_id={app_id}&mcp={}", percent_encode(url))),
+            bearer: bearer(parts),
+            with_secret: true,
             ua: parts
                 .headers
                 .get("user-agent")
