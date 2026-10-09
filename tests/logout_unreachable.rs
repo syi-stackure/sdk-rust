@@ -39,7 +39,7 @@ fn refused_connection_redirects_to_sign_out_page() {
     let (session, result) = runtime.block_on(async {
         (
             stackure::validate_session(&parts).await,
-            stackure::verify(&parts, &[]).await,
+            stackure::verify(&parts).await,
         )
     });
     assert_eq!(

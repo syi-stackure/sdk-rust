@@ -2,7 +2,6 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
@@ -27,13 +26,13 @@ use crate::types::{User, VerifyError, VerifyResult};
 ///
 /// ```no_run
 /// # async fn example(parts: &http::request::Parts) {
-/// let result = stackure::verify(parts, &["can_approve_invoice"]).await;
+/// let result = stackure::verify(parts).await;
 /// if result.authenticated {
 ///     println!("{}", result.user.unwrap().user_email);
 /// }
 /// # }
 /// ```
-pub async fn verify(parts: &Parts, permissions: &[&str]) -> VerifyResult {
+pub async fn verify(parts: &Parts) -> VerifyResult {
     let session = match validate_session(parts).await {
         Ok(session) => session,
         Err(e) => {
@@ -59,23 +58,6 @@ pub async fn verify(parts: &Parts, permissions: &[&str]) -> VerifyResult {
             ..VerifyResult::default()
         };
     };
-
-    if !permissions.is_empty()
-        && !permissions
-            .iter()
-            .any(|p| user.user_permissions.iter().any(|held| held == p))
-    {
-        let list = permissions.join(", ");
-        return VerifyResult {
-            user: Some(user),
-            error: Some(VerifyError {
-                code: 403,
-                message: format!("Requires one of: {list}"),
-                sign_in_url: String::new(),
-            }),
-            ..VerifyResult::default()
-        };
-    }
 
     VerifyResult {
         authenticated: true,
@@ -144,10 +126,10 @@ fn accepts_html(parts: &Parts) -> bool {
 }
 
 fn error_body(error: &VerifyError) -> Bytes {
-    let label = match error.code {
-        401 => "Unauthorized",
-        403 => "Forbidden",
-        _ => "Error",
+    let label = if error.code == 401 {
+        "Unauthorized"
+    } else {
+        "Error"
     };
     Bytes::from(
         serde_json::json!({
@@ -290,14 +272,11 @@ pub async fn logout<B: Default>(parts: &Parts) -> Response<B> {
 /// ```no_run
 /// # use axum::{Router, routing::get};
 /// # let app: Router = Router::new().route("/admin", get(|| async {}));
-/// let app = app.layer(stackure::auth(&["can_approve_invoice"]));
+/// let app = app.layer(stackure::auth());
 /// ```
 #[must_use]
-pub fn auth(permissions: &[&str]) -> AuthLayer {
-    AuthLayer {
-        permissions: permissions.iter().map(|p| (*p).to_string()).collect(),
-        mcp: false,
-    }
+pub fn auth() -> AuthLayer {
+    AuthLayer { mcp: false }
 }
 
 /// Middleware that protects an MCP route, for any tower stack — axum, tonic,
@@ -309,8 +288,7 @@ pub fn auth(permissions: &[&str]) -> AuthLayer {
 /// are ignored. On success the user is inserted into the request extensions,
 /// exactly as [`auth`] does. Every other answer is JSON, never a redirect and
 /// never a cookie: 401 with the `WWW-Authenticate` challenge from Stackure
-/// when not signed in, 403 when a required permission is missing, 503 when
-/// the check itself fails.
+/// when not signed in, 503 when the check itself fails.
 ///
 /// The MCP endpoint must be served from the same site as the app's registered
 /// URL unless an MCP URL is set for the app in Stackure.
@@ -320,20 +298,16 @@ pub fn auth(permissions: &[&str]) -> AuthLayer {
 /// ```no_run
 /// # use axum::{Router, routing::any};
 /// # let app: Router = Router::new().route("/mcp", any(|| async {}));
-/// let app = app.layer(stackure::mcp(&[]));
+/// let app = app.layer(stackure::mcp());
 /// ```
 #[must_use]
-pub fn mcp(permissions: &[&str]) -> AuthLayer {
-    AuthLayer {
-        mcp: true,
-        ..auth(permissions)
-    }
+pub fn mcp() -> AuthLayer {
+    AuthLayer { mcp: true }
 }
 
 /// The tower [`Layer`] returned by [`auth`] and [`mcp`].
 #[derive(Clone, Debug)]
 pub struct AuthLayer {
-    permissions: Arc<[String]>,
     mcp: bool,
 }
 
@@ -343,7 +317,6 @@ impl<S> Layer<S> for AuthLayer {
     fn layer(&self, inner: S) -> Auth<S> {
         Auth {
             inner,
-            permissions: self.permissions.clone(),
             mcp: self.mcp,
         }
     }
@@ -353,7 +326,6 @@ impl<S> Layer<S> for AuthLayer {
 #[derive(Clone, Debug)]
 pub struct Auth<S> {
     inner: S,
-    permissions: Arc<[String]>,
     mcp: bool,
 }
 
@@ -378,7 +350,6 @@ where
     fn call(&mut self, req: Request<ReqB>) -> Self::Future {
         let ready = self.inner.clone();
         let mut inner = std::mem::replace(&mut self.inner, ready);
-        let permissions = self.permissions.clone();
         let mcp = self.mcp;
 
         Box::pin(async move {
@@ -403,13 +374,6 @@ where
                         Some(&session.www_authenticate),
                     ));
                 };
-                if !permissions.is_empty()
-                    && !permissions
-                        .iter()
-                        .any(|p| user.user_permissions.contains(p))
-                {
-                    return Ok(mcp_error(StatusCode::FORBIDDEN, "forbidden", None));
-                }
                 parts.extensions.insert(user);
                 return inner.call(Request::from_parts(parts, body)).await;
             }
@@ -443,8 +407,7 @@ where
                     .expect("handoff response is always valid"));
             }
 
-            let permissions: Vec<&str> = permissions.iter().map(String::as_str).collect();
-            let result = verify(&parts, &permissions).await;
+            let result = verify(&parts).await;
 
             if let Some(error) = result.error.filter(|_| !result.authenticated) {
                 if error.code == 401 && accepts_html(&parts) && !error.sign_in_url.is_empty() {

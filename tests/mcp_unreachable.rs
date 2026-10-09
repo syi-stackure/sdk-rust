@@ -30,7 +30,7 @@ fn refused_connection_is_unavailable() {
         .unwrap();
     let mut app = Router::new()
         .fallback(|| async { "reached the MCP route" })
-        .layer(stackure::mcp(&[]));
+        .layer(stackure::mcp());
     let runtime = Runtime::new().unwrap();
     let task = runtime.spawn(async move {
         let (parts, body) = app.call(request).await.unwrap().into_parts();

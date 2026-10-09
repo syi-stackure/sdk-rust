@@ -15,9 +15,6 @@ pub struct User {
     pub user_first_name: String,
     /// User's last name.
     pub user_last_name: String,
-    /// Permissions granted to the user for the current app.
-    #[serde(default)]
-    pub user_permissions: Vec<String>,
 }
 
 /// Successful [`crate::send_magic_link`] response.
@@ -30,7 +27,7 @@ pub struct MagicLinkResponse {
 /// Why a [`crate::verify`] call did not authenticate.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VerifyError {
-    /// HTTP status code: 401, 403, or 500.
+    /// HTTP status code: 401 or 500.
     pub code: u16,
     /// Human-readable message.
     pub message: String,
@@ -44,7 +41,7 @@ pub struct VerifyError {
 pub struct VerifyResult {
     /// Whether the request carries a valid session.
     pub authenticated: bool,
-    /// The user, when authenticated (also set on a 403).
+    /// The user, when authenticated.
     pub user: Option<User>,
     /// Populated when `authenticated` is `false`.
     pub error: Option<VerifyError>,
