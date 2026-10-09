@@ -68,6 +68,25 @@ AI clients such as Claude, Claude Code, VS Code and Cursor sign users in through
 - The user is attached exactly as `auth` does
 - Not signed in gets a 401 with `WWW-Authenticate`, a failed check a 503, all JSON and never a redirect
 
+## Identity facts
+
+Every authenticated `User`, from `auth` or `mcp`, also carries:
+
+- `user_is_app_admin`: the user is an app admin or owner in their Stackure org, in charge of its apps
+- `user_teams`: the Stackure teams they belong to (`Vec<Team>` of `team_id`, `team_name`), empty when none
+
+List the users and teams in the caller's org who can open the app, for pickers and sharing:
+
+```rust
+let directory = stackure::directory(&parts).await?;
+// directory.users: DirectoryUser { user_id, user_email, user_first_name, user_last_name }
+// directory.teams: Team { team_id, team_name }
+```
+
+`directory` uses the request's session cookie, so call it from a route behind `auth`; MCP bearer tokens are not accepted. No valid session is `StackureError::Auth`.
+
+Stackure defines no in-app permissions. Your app decides what these facts mean.
+
 ## Requirements
 
 Sessions are not bound to the browser's user agent or IP. The SDK still

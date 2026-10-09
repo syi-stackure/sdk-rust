@@ -53,6 +53,8 @@ fn user() -> User {
         user_email: "ada@example.com".into(),
         user_first_name: "Ada".into(),
         user_last_name: "Lovelace".into(),
+        user_is_app_admin: false,
+        user_teams: Vec::new(),
     }
 }
 
