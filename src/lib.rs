@@ -10,7 +10,7 @@
 //! ```no_run
 //! # use axum::{Router, routing::get};
 //! # let app: Router = Router::new().route("/admin", get(|| async {}));
-//! let app = app.layer(stackure::auth(&["can_approve_invoice"]));
+//! let app = app.layer(stackure::auth());
 //! ```
 //!
 //! The layer works in any tower stack — axum, tonic, or hyper.
@@ -27,7 +27,7 @@
 //!
 //! ```no_run
 //! # async fn example(parts: &http::request::Parts) {
-//! let result = stackure::verify(parts, &[]).await;
+//! let result = stackure::verify(parts).await;
 //! if result.authenticated {
 //!     // use result.user
 //! }
@@ -94,7 +94,7 @@
 //! ```no_run
 //! # use axum::{Router, routing::any};
 //! # let app: Router = Router::new().route("/mcp", any(|| async {}));
-//! let app = app.layer(stackure::mcp(&[]));
+//! let app = app.layer(stackure::mcp());
 //! ```
 //!
 //! AI clients such as Claude, Claude Code, VS Code and Cursor sign users in
@@ -106,8 +106,7 @@
 //! The [`mcp`] layer reads only `Authorization: Bearer` and ignores cookies.
 //! It attaches the user exactly as [`auth`] does, and otherwise answers in
 //! JSON, never with a redirect or a cookie: 401 with a `WWW-Authenticate`
-//! header when not signed in, 403 when a required permission is missing, 503
-//! when the check itself fails.
+//! header when not signed in, 503 when the check itself fails.
 //!
 //! # Configuration
 //!

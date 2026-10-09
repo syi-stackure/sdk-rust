@@ -53,7 +53,6 @@ fn user() -> User {
         user_email: "ada@example.com".into(),
         user_first_name: "Ada".into(),
         user_last_name: "Lovelace".into(),
-        user_permissions: vec!["can_read_reports".into()],
     }
 }
 
@@ -158,14 +157,12 @@ async fn tool(parts: Parts) -> Json<Option<User>> {
     Json(stackure::user_from_request(&parts).cloned())
 }
 
-fn send(permissions: &[&str], request: Request<Body>) -> (Response<String>, Vec<Call>) {
+fn send(request: Request<Body>) -> (Response<String>, Vec<Call>) {
     let _serial = serial();
     let platform = platform();
     recorded().clear();
 
-    let mut app = Router::new()
-        .fallback(tool)
-        .layer(stackure::mcp(permissions));
+    let mut app = Router::new().fallback(tool).layer(stackure::mcp());
     let task = platform.runtime.spawn(async move {
         let (parts, body) = app.call(request).await.unwrap().into_parts();
         let body = axum::body::to_bytes(body, usize::MAX).await.unwrap();
@@ -175,8 +172,8 @@ fn send(permissions: &[&str], request: Request<Body>) -> (Response<String>, Vec<
     (response, std::mem::take(&mut *recorded()))
 }
 
-fn mcp(permissions: &[&str], request: Builder) -> (Response<String>, Vec<Call>) {
-    send(permissions, request.body(Body::empty()).unwrap())
+fn mcp(request: Builder) -> (Response<String>, Vec<Call>) {
+    send(request.body(Body::empty()).unwrap())
 }
 
 fn mcp_request() -> Builder {
@@ -224,10 +221,7 @@ fn assert_challenged(response: &Response<String>, case: &str) {
 
 #[test]
 fn valid_bearer_is_validated_without_the_cookie_and_the_user_attached() {
-    let (response, calls) = mcp(
-        &[],
-        with_bearer(TOKEN).header("cookie", format!("session={EXPIRED}")),
-    );
+    let (response, calls) = mcp(with_bearer(TOKEN).header("cookie", format!("session={EXPIRED}")));
 
     assert_eq!(calls, [validate_call(MCP_URL, &format!("Bearer {TOKEN}"))]);
     assert_attached(&response, "");
@@ -236,10 +230,8 @@ fn valid_bearer_is_validated_without_the_cookie_and_the_user_attached() {
 #[test]
 fn bearer_scheme_is_case_insensitive() {
     for scheme in ["bearer", "BEARER", "bEaReR"] {
-        let (response, calls) = mcp(
-            &[],
-            mcp_request().header("authorization", format!("{scheme} {TOKEN}")),
-        );
+        let (response, calls) =
+            mcp(mcp_request().header("authorization", format!("{scheme} {TOKEN}")));
 
         assert_eq!(
             calls,
@@ -263,7 +255,7 @@ fn missing_or_malformed_bearer_is_validated_without_authorization_and_challenged
         mcp_request().header("authorization", format!("Bearer{TOKEN}")),
     ] {
         let case = format!("{request:?}");
-        let (response, calls) = mcp(&[], request.header("accept", "text/html"));
+        let (response, calls) = mcp(request.header("accept", "text/html"));
 
         assert_eq!(calls, [validate_call(MCP_URL, "")], "{case}");
         assert_challenged(&response, &case);
@@ -272,7 +264,7 @@ fn missing_or_malformed_bearer_is_validated_without_authorization_and_challenged
 
 #[test]
 fn rejected_bearer_is_challenged() {
-    let (response, calls) = mcp(&[], with_bearer(EXPIRED));
+    let (response, calls) = mcp(with_bearer(EXPIRED));
 
     assert_eq!(
         calls,
@@ -287,7 +279,7 @@ fn session_cookie_without_bearer_is_ignored() {
         format!("session={TOKEN}"),
         format!("theme=dark; session={TOKEN}"),
     ] {
-        let (response, calls) = mcp(&[], mcp_request().header("cookie", &cookie));
+        let (response, calls) = mcp(mcp_request().header("cookie", &cookie));
 
         assert_eq!(calls, [validate_call(MCP_URL, "")], "{cookie}");
         assert_challenged(&response, &cookie);
@@ -301,7 +293,7 @@ fn sign_in_handoff_is_not_consumed() {
         .header("content-type", "application/x-www-form-urlencoded")
         .body(Body::from(format!("session_token={TOKEN}")))
         .unwrap();
-    let (response, calls) = send(&[], request);
+    let (response, calls) = send(request);
 
     assert_eq!(calls, [validate_call(MCP_URL, "")]);
     assert_challenged(&response, "");
@@ -309,7 +301,7 @@ fn sign_in_handoff_is_not_consumed() {
 
 #[test]
 fn challenge_is_bare_bearer_when_stackure_sends_none() {
-    let (response, calls) = mcp(&[], with_bearer(BARE));
+    let (response, calls) = mcp(with_bearer(BARE));
 
     assert_eq!(calls, [validate_call(MCP_URL, &format!("Bearer {BARE}"))]);
     assert_answered(&response, StatusCode::UNAUTHORIZED, "unauthorized", "");
@@ -317,39 +309,9 @@ fn challenge_is_bare_bearer_when_stackure_sends_none() {
 }
 
 #[test]
-fn missing_permission_is_forbidden() {
-    for permissions in [
-        &["can_approve_invoice"][..],
-        &["can_approve_invoice", "can_delete_reports"],
-    ] {
-        let case = format!("{permissions:?}");
-        let (response, calls) = mcp(permissions, with_bearer(TOKEN));
-
-        assert_eq!(
-            calls,
-            [validate_call(MCP_URL, &format!("Bearer {TOKEN}"))],
-            "{case}"
-        );
-        assert_answered(&response, StatusCode::FORBIDDEN, "forbidden", &case);
-    }
-}
-
-#[test]
-fn any_required_permission_held_is_enough() {
-    for permissions in [
-        &["can_read_reports"][..],
-        &["can_approve_invoice", "can_read_reports"],
-    ] {
-        let (response, _) = mcp(permissions, with_bearer(TOKEN));
-
-        assert_attached(&response, &format!("{permissions:?}"));
-    }
-}
-
-#[test]
 fn validate_error_is_unavailable() {
     for token in [REFUSED, THROTTLED, REJECTED, GARBLED] {
-        let (response, calls) = mcp(&[], with_bearer(token));
+        let (response, calls) = mcp(with_bearer(token));
 
         assert_eq!(
             calls,
@@ -367,7 +329,7 @@ fn validate_error_is_unavailable() {
 
 #[test]
 fn failing_validate_is_retried_then_unavailable() {
-    let (response, calls) = mcp(&[], with_bearer(UNAVAILABLE));
+    let (response, calls) = mcp(with_bearer(UNAVAILABLE));
 
     let call = || validate_call(MCP_URL, &format!("Bearer {UNAVAILABLE}"));
     assert_eq!(calls, [call(), call()]);
@@ -400,10 +362,7 @@ fn https_is_reflected_in_the_mcp_url() {
         ),
     ] {
         let case = format!("{request:?}");
-        let (response, calls) = mcp(
-            &[],
-            request.header("authorization", format!("Bearer {TOKEN}")),
-        );
+        let (response, calls) = mcp(request.header("authorization", format!("Bearer {TOKEN}")));
 
         assert_eq!(
             calls,
@@ -424,12 +383,9 @@ fn mcp_url_has_the_path_and_not_the_query_string() {
             "http://app.example.com/mcp/a&b=c%20d+e",
         ),
     ] {
-        let (response, calls) = mcp(
-            &[],
-            Request::post(uri)
-                .header("host", "app.example.com")
-                .header("authorization", format!("Bearer {TOKEN}")),
-        );
+        let (response, calls) = mcp(Request::post(uri)
+            .header("host", "app.example.com")
+            .header("authorization", format!("Bearer {TOKEN}")));
 
         assert_eq!(
             calls,
@@ -446,10 +402,7 @@ fn nested_mount_reports_the_public_path() {
     let platform = platform();
     recorded().clear();
 
-    let mut app = Router::new().nest(
-        "/api",
-        Router::new().fallback(tool).layer(stackure::mcp(&[])),
-    );
+    let mut app = Router::new().nest("/api", Router::new().fallback(tool).layer(stackure::mcp()));
     let request = Request::post("/api/mcp")
         .header("host", "app.example.com")
         .header("authorization", format!("Bearer {TOKEN}"))
