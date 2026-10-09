@@ -1,7 +1,7 @@
 //! Stackure is the Rust SDK for the Stackure authentication API.
 //!
 //! Stackure provides passwordless B2B authentication. This SDK wraps the
-//! public API behind eight free functions and a tower middleware.
+//! public API behind nine free functions and a tower middleware.
 //!
 //! # Quickstart
 //!
@@ -108,6 +108,29 @@
 //! JSON, never with a redirect or a cookie: 401 with a `WWW-Authenticate`
 //! header when not signed in, 503 when the check itself fails.
 //!
+//! # Identity facts
+//!
+//! Every authenticated [`User`], from [`auth`] or [`mcp`], also carries two
+//! facts from the user's Stackure organization: `user_is_app_admin` is true
+//! when the user is an app admin or owner there, in charge of its apps, and
+//! `user_teams` lists the Stackure teams they belong to (empty when none).
+//! Stackure defines no in-app permissions; the app decides what these mean.
+//!
+//! List the users and teams in the caller's organization who can open the
+//! app, for pickers and sharing:
+//!
+//! ```no_run
+//! # async fn example(parts: &http::request::Parts) -> Result<(), stackure::StackureError> {
+//! let directory = stackure::directory(parts).await?;
+//! // directory.users, directory.teams
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! [`directory`] is authenticated by the request's session cookie, so call it
+//! from a route behind [`auth`]; MCP bearer tokens are not accepted. A request
+//! without a valid session gets [`StackureError::Auth`].
+//!
 //! # Configuration
 //!
 //! `STACKURE_APP_ID` must be set to the app's UUID, shown on the app page in
@@ -146,7 +169,11 @@ pub mod middleware;
 pub mod types;
 pub mod validation;
 
-pub use client::{SESSION_COOKIE, TOKEN_PARAM, base_url, send_magic_link, validate_session};
+pub use client::{
+    SESSION_COOKIE, TOKEN_PARAM, base_url, directory, send_magic_link, validate_session,
+};
 pub use errors::StackureError;
 pub use middleware::{Auth, AuthLayer, auth, logout, mcp, user_from_request, verify};
-pub use types::{MagicLinkResponse, Session, User, VerifyError, VerifyResult};
+pub use types::{
+    Directory, DirectoryUser, MagicLinkResponse, Session, Team, User, VerifyError, VerifyResult,
+};

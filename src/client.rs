@@ -14,7 +14,7 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 
 use crate::errors::StackureError;
-use crate::types::{MagicLinkResponse, Session, User};
+use crate::types::{Directory, MagicLinkResponse, Session, User};
 use crate::validation::{is_uuid, validate_email, validate_uuid};
 
 const DEFAULT_BASE_URL: &str = "https://stackure.com";
@@ -387,9 +387,52 @@ pub async fn validate_token(token: &str, parts: &Parts) -> Result<Session, Stack
         });
     }
 
+    get_with_session("/api/public/auth/session/validate", &app_id, token, parts).await
+}
+
+/// List the users and teams in the caller's Stackure organization who can
+/// open the app, for pickers and sharing.
+///
+/// Authenticated by the request's session cookie, so call it from a route
+/// behind [`crate::auth`]; MCP bearer tokens are not accepted. A request
+/// without a well-formed session token gets [`StackureError::Auth`] without a
+/// Stackure call.
+///
+/// # Example
+///
+/// ```no_run
+/// # async fn example(parts: &http::request::Parts) -> Result<(), stackure::StackureError> {
+/// let directory = stackure::directory(parts).await?;
+/// for user in &directory.users {
+///     println!("{}", user.user_email);
+/// }
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Errors
+///
+/// Returns [`StackureError::Auth`] when there is no valid session or the app
+/// secret is wrong, or any other [`StackureError`] on invalid input or a
+/// transport or API failure.
+pub async fn directory(parts: &Parts) -> Result<Directory, StackureError> {
+    let app_id = app_id()?;
+    let token = cookie(parts, SESSION_COOKIE);
+    if !is_uuid(&token) {
+        return Err(StackureError::Auth("invalid session".into()));
+    }
+    get_with_session("/api/public/directory", &app_id, &token, parts).await
+}
+
+async fn get_with_session<T: serde::de::DeserializeOwned>(
+    path: &str,
+    app_id: &str,
+    token: &str,
+    parts: &Parts,
+) -> Result<T, StackureError> {
     let data = request(
         &Method::GET,
-        "/api/public/auth/session/validate",
+        path,
         CallOpts {
             query: Some(format!("app_id={app_id}")),
             token,
