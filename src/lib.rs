@@ -1,7 +1,7 @@
 //! Stackure is the Rust SDK for the Stackure authentication API.
 //!
 //! Stackure provides passwordless B2B authentication. This SDK wraps the
-//! public API behind 9 free functions and a tower middleware.
+//! public API behind 10 free functions and a tower middleware.
 //!
 //! # Quickstart
 //!
@@ -116,20 +116,32 @@
 //! `user_teams` lists the Stackure teams they belong to (empty when none).
 //! Stackure defines no in-app permissions; the app decides what these mean.
 //!
-//! List the users and teams in the caller's organization who can open the
-//! app, for pickers and sharing:
+//! List the users in the caller's organization who can open the app, and the
+//! teams that have it, for pickers and sharing. Each call returns one page,
+//! sorted by name:
 //!
 //! ```no_run
 //! # async fn example(parts: &http::request::Parts) -> Result<(), stackure::StackureError> {
-//! let directory = stackure::directory(parts).await?;
-//! // directory.users, directory.teams
+//! let opts = stackure::DirectoryOptions {
+//!     query: Some("ada".into()),
+//!     ..Default::default()
+//! };
+//! let page = stackure::directory_users(parts, &opts).await?;
+//! // page.items, page.next_cursor, page.total
+//! let teams = stackure::directory_teams(parts, &Default::default()).await?;
 //! # Ok(())
 //! # }
 //! ```
 //!
-//! [`directory`] is authenticated by the request's session cookie, so call it
-//! from a route behind [`auth`]; MCP bearer tokens are not accepted. A request
-//! without a valid session gets [`StackureError::Auth`].
+//! `query` matches a user's name, email and job title, or a team's name.
+//! `limit` is the page size: 100 by default, 200 at most. Pass `next_cursor`
+//! as `cursor` to get the next page; it's `None` on the last one. `total` is
+//! set on the first page when there are 10,000 matches or fewer.
+//!
+//! [`directory_users`] and [`directory_teams`] are authenticated by the
+//! request's session cookie, so call them from a route behind [`auth`]; MCP
+//! bearer tokens are not accepted. A request without a valid session gets
+//! [`StackureError::Auth`].
 //!
 //! # Configuration
 //!
@@ -170,10 +182,12 @@ pub mod types;
 pub mod validation;
 
 pub use client::{
-    SESSION_COOKIE, TOKEN_PARAM, base_url, directory, send_magic_link, validate_session,
+    SESSION_COOKIE, TOKEN_PARAM, base_url, directory_teams, directory_users, send_magic_link,
+    validate_session,
 };
 pub use errors::StackureError;
 pub use middleware::{Auth, AuthLayer, auth, logout, mcp, user_from_request, verify};
 pub use types::{
-    Directory, DirectoryUser, MagicLinkResponse, Session, Team, User, VerifyError, VerifyResult,
+    DirectoryOptions, DirectoryPage, DirectoryUser, MagicLinkResponse, Session, Team, User,
+    VerifyError, VerifyResult,
 };

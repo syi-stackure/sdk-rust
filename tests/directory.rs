@@ -1,4 +1,4 @@
-//! Identity facts and `directory` against a local stand-in for the Stackure API.
+//! Identity facts and the directory calls against a local stand-in for the Stackure API.
 
 use std::future::Future;
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
@@ -7,9 +7,9 @@ use axum::body::Body;
 use axum::extract::Query;
 use axum::http::request::{Builder, Parts};
 use axum::http::{HeaderMap, Request, StatusCode, Uri};
-use axum::response::IntoResponse;
+use axum::response::{AppendHeaders, IntoResponse};
 use axum::{Json, Router};
-use stackure::{Directory, DirectoryUser, StackureError, Team, User};
+use stackure::{DirectoryOptions, DirectoryPage, DirectoryUser, StackureError, Team, User};
 use tokio::runtime::Runtime;
 use tower::Service;
 
@@ -23,6 +23,8 @@ const REJECTED: &str = "4f9b0a5c-9e7d-4a6f-82c1-3e2d1f0a9b8c";
 const ADMIN: &str = "5a0c1b6d-0f8e-4b7a-93d2-2f1e0a9b8c7d";
 const MEMBER: &str = "6b1d2c7e-1a9f-4c8b-a4e3-1a0f9b8c7d6e";
 const OLDER: &str = "7c2e3d8f-2b0a-4d9c-b5f4-0b1a2c3d4e5f";
+const USERS: &str = "/api/public/directory/users";
+const TEAMS: &str = "/api/public/directory/teams";
 
 #[derive(Debug, PartialEq)]
 struct Call {
@@ -54,15 +56,20 @@ fn ops() -> Team {
     }
 }
 
-fn listed() -> Directory {
-    Directory {
-        users: vec![DirectoryUser {
-            user_id: "8d3f4e9a-3c1b-4eab-86a5-1c2b3d4e5f6a".into(),
-            user_email: "ada@example.com".into(),
-            user_first_name: "Ada".into(),
-            user_last_name: "Lovelace".into(),
-        }],
-        teams: vec![ops()],
+fn listed() -> DirectoryUser {
+    DirectoryUser {
+        user_id: "8d3f4e9a-3c1b-4eab-86a5-1c2b3d4e5f6a".into(),
+        user_email: "ada@example.com".into(),
+        user_first_name: "Ada".into(),
+        user_last_name: "Lovelace".into(),
+    }
+}
+
+fn page<T>(item: T, next_cursor: Option<&str>, total: Option<u64>) -> DirectoryPage<T> {
+    DirectoryPage {
+        items: vec![item],
+        next_cursor: next_cursor.map(String::from),
+        total,
     }
 }
 
@@ -91,6 +98,7 @@ async fn api(
         .or_else(|| authorization.strip_prefix("Bearer "))
         .unwrap_or_default()
         .to_string();
+    let first = !query.iter().any(|(k, _)| k == "cursor");
     recorded().push(Call {
         path: uri.path().into(),
         query,
@@ -108,7 +116,19 @@ async fn api(
         "user_last_name": "Lovelace",
     });
     match token.as_str() {
-        TOKEN => return Json(listed()).into_response(),
+        TOKEN => {
+            let items = if uri.path() == TEAMS {
+                serde_json::json!([ops()])
+            } else {
+                serde_json::json!([listed()])
+            };
+            let headers = if first {
+                vec![("x-next-cursor", "c1"), ("x-total-count", "3")]
+            } else {
+                vec![]
+            };
+            return (AppendHeaders(headers), Json(items)).into_response();
+        }
         INVALID => {
             return (StatusCode::UNAUTHORIZED, r#"{"error":"invalid session"}"#).into_response();
         }
@@ -125,7 +145,7 @@ async fn api(
         REJECTED => {
             return (
                 StatusCode::BAD_REQUEST,
-                r#"{"error":"invalid app_id format"}"#,
+                r#"{"error":"invalid input: cursor"}"#,
             )
                 .into_response();
         }
@@ -200,10 +220,12 @@ fn with_session(token: &str) -> Parts {
     parts(browser().header("cookie", format!("session={token}")))
 }
 
-fn directory_call(token: &str) -> Call {
+fn directory_call(path: &str, token: &str, extra: &[(&str, &str)]) -> Call {
+    let mut query = vec![("app_id".into(), APP_ID.into())];
+    query.extend(extra.iter().map(|&(k, v)| (k.into(), v.into())));
     Call {
-        path: "/api/public/directory".into(),
-        query: vec![("app_id".into(), APP_ID.into())],
+        path: path.into(),
+        query,
         authorization: String::new(),
         app_secret: APP_SECRET.into(),
         cookie: format!("session={token}"),
@@ -249,16 +271,39 @@ fn identity_facts_are_decoded_for_session_and_mcp_users() {
 }
 
 #[test]
-fn directory_lists_users_and_teams() {
+fn directory_pages() {
     let session = with_session(TOKEN);
-    let (result, calls) = run(|| stackure::directory(&session));
+    let first = DirectoryOptions {
+        query: Some("ada lo".into()),
+        limit: Some(2),
+        ..DirectoryOptions::default()
+    };
+    let next = DirectoryOptions {
+        cursor: Some("c1".into()),
+        ..DirectoryOptions::default()
+    };
+    let first_query = [("q", "ada lo"), ("limit", "2")];
 
-    assert_eq!(result, Ok(listed()));
-    assert_eq!(calls, [directory_call(TOKEN)]);
+    let (result, calls) = run(|| stackure::directory_users(&session, &first));
+    assert_eq!(result, Ok(page(listed(), Some("c1"), Some(3))));
+    assert_eq!(calls, [directory_call(USERS, TOKEN, &first_query)]);
+
+    let (result, calls) = run(|| stackure::directory_teams(&session, &first));
+    assert_eq!(result, Ok(page(ops(), Some("c1"), Some(3))));
+    assert_eq!(calls, [directory_call(TEAMS, TOKEN, &first_query)]);
+
+    let (result, calls) = run(|| stackure::directory_users(&session, &next));
+    assert_eq!(result, Ok(page(listed(), None, None)));
+    assert_eq!(calls, [directory_call(USERS, TOKEN, &[("cursor", "c1")])]);
+
+    let (result, calls) = run(|| stackure::directory_teams(&session, &next));
+    assert_eq!(result, Ok(page(ops(), None, None)));
+    assert_eq!(calls, [directory_call(TEAMS, TOKEN, &[("cursor", "c1")])]);
 }
 
 #[test]
 fn directory_errors_map_like_other_api_errors() {
+    let opts = DirectoryOptions::default();
     for (token, want) in [
         (
             INVALID,
@@ -274,19 +319,27 @@ fn directory_errors_map_like_other_api_errors() {
         ),
         (
             REJECTED,
-            StackureError::Network(r#"api error (400): {"error":"invalid app_id format"}"#.into()),
+            StackureError::Network(r#"api error (400): {"error":"invalid input: cursor"}"#.into()),
+        ),
+        (
+            OLDER,
+            StackureError::Network("unexpected API response format".into()),
         ),
     ] {
         let session = with_session(token);
-        let (result, calls) = run(|| stackure::directory(&session));
+        let (result, calls) = run(|| stackure::directory_users(&session, &opts));
+        assert_eq!(result, Err(want.clone()), "{token}");
+        assert_eq!(calls, [directory_call(USERS, token, &[])], "{token}");
 
+        let (result, calls) = run(|| stackure::directory_teams(&session, &opts));
         assert_eq!(result, Err(want), "{token}");
-        assert_eq!(calls, [directory_call(token)], "{token}");
+        assert_eq!(calls, [directory_call(TEAMS, token, &[])], "{token}");
     }
 }
 
 #[test]
 fn directory_without_a_session_is_auth_without_a_call() {
+    let opts = DirectoryOptions::default();
     for request in [
         browser(),
         browser().header("cookie", "session=not-a-token"),
@@ -294,10 +347,17 @@ fn directory_without_a_session_is_auth_without_a_call() {
     ] {
         let case = format!("{request:?}");
         let request = parts(request);
-        let (result, calls) = run(|| stackure::directory(&request));
-
+        let (users, calls) = run(|| stackure::directory_users(&request, &opts));
         assert_eq!(
-            result,
+            users,
+            Err(StackureError::Auth("invalid session".into())),
+            "{case}"
+        );
+        assert!(calls.is_empty(), "{case}");
+
+        let (teams, calls) = run(|| stackure::directory_teams(&request, &opts));
+        assert_eq!(
+            teams,
             Err(StackureError::Auth("invalid session".into())),
             "{case}"
         );

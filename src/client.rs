@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use http::request::Parts;
-use http::{HeaderValue, Method, Request};
+use http::{HeaderMap, HeaderValue, Method, Request};
 use http_body_util::{BodyExt, Full};
 use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::Client;
@@ -14,7 +14,9 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 
 use crate::errors::StackureError;
-use crate::types::{Directory, MagicLinkResponse, Session, User};
+use crate::types::{
+    DirectoryOptions, DirectoryPage, DirectoryUser, MagicLinkResponse, Session, Team, User,
+};
 use crate::validation::{is_uuid, validate_email, validate_uuid};
 
 const DEFAULT_BASE_URL: &str = "https://stackure.com";
@@ -99,7 +101,7 @@ async fn send_once(
     url: &str,
     o: &CallOpts<'_>,
     secret: &str,
-) -> Result<(u16, Bytes), StackureError> {
+) -> Result<(u16, HeaderMap, Bytes), StackureError> {
     let mut builder = Request::builder().method(method).uri(url);
     if o.body.is_some() {
         builder = builder.header("content-type", "application/json");
@@ -142,8 +144,9 @@ async fn send_once(
         .map_err(|e| StackureError::Network(format!("network request failed: {e}")))?;
 
     let status = response.status().as_u16();
+    let headers = response.headers().clone();
     if o.status_only {
-        return Ok((status, Bytes::new()));
+        return Ok((status, headers, Bytes::new()));
     }
     let bytes = response
         .into_body()
@@ -151,10 +154,14 @@ async fn send_once(
         .await
         .map_err(|_| StackureError::Network("failed to read response body".into()))?
         .to_bytes();
-    Ok((status, bytes))
+    Ok((status, headers, bytes))
 }
 
-async fn send(method: &Method, path: &str, o: &CallOpts<'_>) -> Result<Bytes, StackureError> {
+async fn send(
+    method: &Method,
+    path: &str,
+    o: &CallOpts<'_>,
+) -> Result<(HeaderMap, Bytes), StackureError> {
     let deadline = tokio::time::Instant::now() + REQUEST_TIMEOUT;
     let secret = if o.bearer.is_empty() || o.with_secret {
         app_secret()?
@@ -180,8 +187,8 @@ async fn send(method: &Method, path: &str, o: &CallOpts<'_>) -> Result<Bytes, St
         let retry = attempt < MAX_RETRIES
             && deadline.saturating_duration_since(tokio::time::Instant::now()) > RETRY_DELAY;
         match res {
-            Ok((status, bytes)) if status < 500 || !retry => {
-                return check_status(status, &bytes).map(|()| bytes);
+            Ok((status, headers, bytes)) if status < 500 || !retry => {
+                return check_status(status, &bytes).map(|()| (headers, bytes));
             }
             Err(e) if !retry => return Err(e),
             _ => {}
@@ -196,8 +203,12 @@ async fn request(
     path: &str,
     o: CallOpts<'_>,
 ) -> Result<serde_json::Value, StackureError> {
-    let bytes = send(method, path, &o).await?;
-    serde_json::from_str(&String::from_utf8_lossy(&bytes))
+    let (_, bytes) = send(method, path, &o).await?;
+    json(&bytes)
+}
+
+fn json(bytes: &[u8]) -> Result<serde_json::Value, StackureError> {
+    serde_json::from_str(&String::from_utf8_lossy(bytes))
         .map_err(|_| StackureError::Network("invalid JSON response from server".into()))
 }
 
@@ -387,11 +398,18 @@ pub async fn validate_token(token: &str, parts: &Parts) -> Result<Session, Stack
         });
     }
 
-    get_with_session("/api/public/auth/session/validate", &app_id, token, parts).await
+    get_with_session(
+        "/api/public/auth/session/validate",
+        format!("app_id={app_id}"),
+        token,
+        parts,
+    )
+    .await
+    .map(|(_, session)| session)
 }
 
-/// List the users and teams in the caller's Stackure organization who can
-/// open the app, for pickers and sharing.
+/// List the users in the caller's Stackure organization who can open the
+/// app, one page at a time, for pickers and sharing.
 ///
 /// Authenticated by the request's session cookie, so call it from a route
 /// behind [`crate::auth`]; MCP bearer tokens are not accepted. A request
@@ -402,9 +420,17 @@ pub async fn validate_token(token: &str, parts: &Parts) -> Result<Session, Stack
 ///
 /// ```no_run
 /// # async fn example(parts: &http::request::Parts) -> Result<(), stackure::StackureError> {
-/// let directory = stackure::directory(parts).await?;
-/// for user in &directory.users {
-///     println!("{}", user.user_email);
+/// let mut opts = stackure::DirectoryOptions {
+///     query: Some("ada".into()),
+///     ..Default::default()
+/// };
+/// loop {
+///     let page = stackure::directory_users(parts, &opts).await?;
+///     for user in &page.items {
+///         println!("{}", user.user_email);
+///     }
+///     let Some(next) = page.next_cursor else { break };
+///     opts.cursor = Some(next);
 /// }
 /// # Ok(())
 /// # }
@@ -415,26 +441,88 @@ pub async fn validate_token(token: &str, parts: &Parts) -> Result<Session, Stack
 /// Returns [`StackureError::Auth`] when there is no valid session or the app
 /// secret is wrong, or any other [`StackureError`] on invalid input or a
 /// transport or API failure.
-pub async fn directory(parts: &Parts) -> Result<Directory, StackureError> {
-    let app_id = app_id()?;
+pub async fn directory_users(
+    parts: &Parts,
+    opts: &DirectoryOptions,
+) -> Result<DirectoryPage<DirectoryUser>, StackureError> {
+    directory("/api/public/directory/users", parts, opts).await
+}
+
+/// List the teams in the caller's Stackure organization that have the app,
+/// one page at a time: every team when the app is available to everyone,
+/// otherwise the teams it's shared with.
+///
+/// Authenticated like [`directory_users`].
+///
+/// # Example
+///
+/// ```no_run
+/// # async fn example(parts: &http::request::Parts) -> Result<(), stackure::StackureError> {
+/// let opts = stackure::DirectoryOptions {
+///     limit: Some(50),
+///     ..Default::default()
+/// };
+/// let page = stackure::directory_teams(parts, &opts).await?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Errors
+///
+/// Same as [`directory_users`].
+pub async fn directory_teams(
+    parts: &Parts,
+    opts: &DirectoryOptions,
+) -> Result<DirectoryPage<Team>, StackureError> {
+    directory("/api/public/directory/teams", parts, opts).await
+}
+
+async fn directory<T: serde::de::DeserializeOwned>(
+    path: &str,
+    parts: &Parts,
+    o: &DirectoryOptions,
+) -> Result<DirectoryPage<T>, StackureError> {
+    use std::fmt::Write as _;
+    let mut query = format!("app_id={}", app_id()?);
     let token = cookie(parts, SESSION_COOKIE);
     if !is_uuid(&token) {
         return Err(StackureError::Auth("invalid session".into()));
     }
-    get_with_session("/api/public/directory", &app_id, &token, parts).await
+    for (name, value) in [("q", &o.query), ("cursor", &o.cursor)] {
+        if let Some(v) = value.as_deref().filter(|v| !v.is_empty()) {
+            let _ = write!(query, "&{name}={}", percent_encode(v));
+        }
+    }
+    if let Some(n) = o.limit {
+        let _ = write!(query, "&limit={n}");
+    }
+
+    let (headers, items) = get_with_session(path, query, &token, parts).await?;
+    let header = |name| {
+        headers
+            .get(name)
+            .and_then(|v: &HeaderValue| v.to_str().ok())
+    };
+    Ok(DirectoryPage {
+        items,
+        next_cursor: header("x-next-cursor")
+            .filter(|v| !v.is_empty())
+            .map(String::from),
+        total: header("x-total-count").and_then(|v| v.parse().ok()),
+    })
 }
 
 async fn get_with_session<T: serde::de::DeserializeOwned>(
     path: &str,
-    app_id: &str,
+    query: String,
     token: &str,
     parts: &Parts,
-) -> Result<T, StackureError> {
-    let data = request(
+) -> Result<(HeaderMap, T), StackureError> {
+    let (headers, bytes) = send(
         &Method::GET,
         path,
-        CallOpts {
-            query: Some(format!("app_id={app_id}")),
+        &CallOpts {
+            query: Some(query),
             token,
             ua: parts
                 .headers
@@ -447,7 +535,8 @@ async fn get_with_session<T: serde::de::DeserializeOwned>(
     )
     .await?;
 
-    serde_json::from_value(data)
+    serde_json::from_value(json(&bytes)?)
+        .map(|data| (headers, data))
         .map_err(|_| StackureError::Network("unexpected API response format".into()))
 }
 
