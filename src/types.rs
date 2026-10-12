@@ -90,7 +90,7 @@ pub struct VerifyResult {
 /// Raw [`crate::validate_session`] response.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Session {
-    /// Whether Stackure recognised the session.
+    /// Whether Stackure recognized the session.
     #[serde(default)]
     pub authenticated: bool,
     /// The user, when authenticated.

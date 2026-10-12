@@ -24,7 +24,7 @@ pub enum StackureError {
 
 impl StackureError {
     /// The stable, lowercase category: `"validation"`, `"auth"`,
-    /// `"forbidden"`, `"timeout"`, or `"network"`.
+    /// `"forbidden"`, `"timeout"` or `"network"`.
     #[must_use]
     pub fn code(&self) -> &'static str {
         match self {

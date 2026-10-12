@@ -6,8 +6,9 @@ description = "Official Stackure authentication SDK for Rust"
 license = "MIT"
 repository = "https://github.com/syi-stackure/sdk-rust"
 homepage = "https://stackure.com"
-documentation = "https://docs.rs/stackure"
+documentation = "https://stackure.com/docs/rust"
 readme = "README.md"
+exclude = ["/CLAUDE.md"]
 keywords = ["authentication", "auth", "stackure", "passwordless", "sdk"]
 categories = ["authentication", "web-programming"]
 
