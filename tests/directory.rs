@@ -299,6 +299,23 @@ fn directory_pages() {
     let (result, calls) = run(|| stackure::directory_teams(&session, &next));
     assert_eq!(result, Ok(page(ops(), None, None)));
     assert_eq!(calls, [directory_call(TEAMS, TOKEN, &[("cursor", "c1")])]);
+
+    let by_ids = DirectoryOptions {
+        ids: vec!["a".into(), "b".into()],
+        limit: Some(200),
+        cursor: Some("c1".into()),
+        ..DirectoryOptions::default()
+    };
+    let (result, calls) = run(|| stackure::directory_users(&session, &by_ids));
+    assert_eq!(result, Ok(page(listed(), None, None)));
+    assert_eq!(
+        calls,
+        [directory_call(
+            USERS,
+            TOKEN,
+            &[("cursor", "c1"), ("limit", "200"), ("id", "a"), ("id", "b")]
+        )]
+    );
 }
 
 #[test]

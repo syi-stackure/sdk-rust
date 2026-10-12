@@ -136,7 +136,9 @@
 //! `query` matches a user's name, email and job title, or a team's name.
 //! `limit` is the page size: 100 by default, 200 at most. Pass `next_cursor`
 //! as `cursor` to get the next page; it's `None` on the last one. `total` is
-//! set on the first page when there are 10,000 matches or fewer.
+//! set on the first page when there are 10,000 matches or fewer. `ids` returns
+//! only those IDs that can open the app, up to 200, to check or name people
+//! and teams you already store.
 //!
 //! [`directory_users`] and [`directory_teams`] are authenticated by the
 //! request's session cookie, so call them from a route behind [`auth`]; MCP

@@ -496,6 +496,9 @@ async fn directory<T: serde::de::DeserializeOwned>(
     if let Some(n) = o.limit {
         let _ = write!(query, "&limit={n}");
     }
+    for id in &o.ids {
+        let _ = write!(query, "&id={}", percent_encode(id));
+    }
 
     let (headers, items) = get_with_session(path, query, &token, parts).await?;
     let header = |name| {
