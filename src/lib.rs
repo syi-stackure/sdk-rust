@@ -1,7 +1,7 @@
 //! Stackure is the Rust SDK for the Stackure authentication API.
 //!
 //! Stackure provides passwordless B2B authentication. This SDK wraps the
-//! public API behind nine free functions and a tower middleware.
+//! public API behind 9 free functions and a tower middleware.
 //!
 //! # Quickstart
 //!
@@ -13,7 +13,7 @@
 //! let app = app.layer(stackure::auth());
 //! ```
 //!
-//! The layer works in any tower stack — axum, tonic, or hyper.
+//! The layer works in any tower stack: axum, tonic or hyper.
 //!
 //! Access the authenticated user inside a handler:
 //!
@@ -42,8 +42,8 @@
 //! # }
 //! ```
 //!
-//! Log the user out, ending their access everywhere. Mount it for every method
-//! on the logout path. Trigger it with a form or button that POSTs from the
+//! Sign the user out, ending their access everywhere. Mount it for every method
+//! on the sign-out path. Trigger it with a form or button that POSTs from the
 //! app's own page; a link or any other request is sent to Stackure's sign-out
 //! page, where the user confirms. Awaiting it yields the redirect response,
 //! never an error:
@@ -110,7 +110,7 @@
 //!
 //! # Identity facts
 //!
-//! Every authenticated [`User`], from [`auth`] or [`mcp`], also carries two
+//! Every authenticated [`User`], from [`auth`] or [`mcp`], also carries 2
 //! facts from the user's Stackure organization: `user_is_app_admin` is true
 //! when the user is an app admin or owner there, in charge of its apps, and
 //! `user_teams` lists the Stackure teams they belong to (empty when none).
@@ -142,9 +142,9 @@
 //! unset, or when `STACKURE_APP_ID` is not a UUID. `STACKURE_BASE_URL`
 //! overrides the API host (default `https://stackure.com`).
 //!
-//! A newly registered app is not usable by anyone, even its creator, until it
-//! is shared with the organization or assigned to a team in Stackure. Do that
-//! before testing sign-in.
+//! People can open a newly registered app once an app admin gives it to
+//! everyone in the organization or to one of their teams in Stackure. App
+//! admins and the owner can always open it, so they can test sign-in first.
 //!
 //! Every SDK call has one 2-second wall-clock deadline covering connect,
 //! headers, body and the single retry. The SDK retries once, after 500 ms, on

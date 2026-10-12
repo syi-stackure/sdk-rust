@@ -5,9 +5,7 @@
 [![docs.rs](https://img.shields.io/docsrs/stackure)](https://docs.rs/stackure)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-Passwordless magic-link authentication SDK for Rust — drop-in tower middleware for axum, tonic, and hyper.
-
-Protect an app with one line, or verify sessions and send magic links directly against the [Stackure](https://stackure.com) auth API.
+Add Stackure sign-in to axum, tonic and hyper with tower middleware.
 
 ## Install
 
@@ -16,185 +14,28 @@ Protect an app with one line, or verify sessions and send magic links directly a
 stackure = "1"
 ```
 
-Requires Rust 2024 edition.
+Needs Rust 1.85 or later.
 
-## Configure
+## Example
 
-```bash
-export STACKURE_APP_ID=...       # the app's UUID, from the app page in Stackure
-export STACKURE_APP_SECRET=...   # from the app page in Stackure, shown once
-```
-
-The secret is sent as `X-App-Secret` on every call except the sign-out made by `logout`, which carries the user's session token instead. The first call that needs either fails with `StackureError::Validation` when it is unset, or when `STACKURE_APP_ID` is not a UUID. `STACKURE_BASE_URL` optionally overrides the API host.
-
-A newly registered app is not usable by anyone, even its creator, until it is shared with the organization or assigned to a team in Stackure. Do that before testing sign-in.
-
-## Protect an app
+Set `STACKURE_APP_ID` and `STACKURE_APP_SECRET` from the app's page in Stackure, then add the layer:
 
 ```rust
-use stackure::{auth, user_from_request};
+use axum::{Extension, Router, routing::get};
+use stackure::User;
+
+async fn admin(Extension(user): Extension<User>) -> String {
+    user.user_email
+}
 
 let app = Router::new()
-    .route("/admin", get(handler))
-    .layer(auth());
+    .route("/admin", get(admin))
+    .layer(stackure::auth());
 ```
 
-Access the authenticated user in your handler:
+## Documentation
 
-```rust
-let user = user_from_request(&parts).unwrap();
-println!("{} {}", user.user_email, user.account_id);
-```
-
-In axum you can also take an `Extension<User>` directly.
-
-- API requests get JSON errors
-- Browser requests get redirected to sign-in
-- The sign-in handoff is automatic: Stackure POSTs a `session_token` (an app-scoped session token valid only for this app) back to your app, the layer validates it and stores it as a cookie on your domain. Handoff bodies over 4 KB are ignored
-
-## MCP
-
-```rust
-use stackure::mcp;
-
-let app = Router::new()
-    .route("/mcp", any(handler))
-    .layer(mcp());
-```
-
-AI clients such as Claude, Claude Code, VS Code and Cursor sign users in through Stackure. This one line checks every MCP request in real time with the same app secret; there is no extra setup. The MCP endpoint must be served from the same site as the app's registered URL unless an MCP URL is set for the app in Stackure.
-
-- Only `Authorization: Bearer` is read; cookies are ignored
-- The user is attached exactly as `auth` does
-- Not signed in gets a 401 with `WWW-Authenticate`, a failed check a 503, all JSON and never a redirect
-
-## Identity facts
-
-Every authenticated `User`, from `auth` or `mcp`, also carries:
-
-- `user_is_app_admin`: the user is an app admin or owner in their Stackure org, in charge of its apps
-- `user_teams`: the Stackure teams they belong to (`Vec<Team>` of `team_id`, `team_name`), empty when none
-
-List the users and teams in the caller's org who can open the app, for pickers and sharing:
-
-```rust
-let directory = stackure::directory(&parts).await?;
-// directory.users: DirectoryUser { user_id, user_email, user_first_name, user_last_name }
-// directory.teams: Team { team_id, team_name }
-```
-
-`directory` uses the request's session cookie, so call it from a route behind `auth`; MCP bearer tokens are not accepted. No valid session is `StackureError::Auth`.
-
-Stackure defines no in-app permissions. Your app decides what these facts mean.
-
-## Requirements
-
-Sessions are not bound to the browser's user agent or IP. The SDK still
-forwards the original `User-Agent` and `X-Forwarded-For` when validating from
-your server, but they are informational only.
-
-When `X-Forwarded-For` is absent the SDK falls back to the peer address, read
-from axum's `ConnectInfo<SocketAddr>`. Serve with
-`into_make_service_with_connect_info` to make it available, or disable the
-default `axum` feature if you do not need it.
-
-The app cookie is marked `Secure` only when the request arrived over TLS as far as the SDK can tell: send `X-Forwarded-Proto: https` from your TLS terminator, since a direct TLS listener is not visible from the request itself.
-
-Every request with a session token is validated against Stackure, so revocation
-is immediate. Requests without a well-formed token get the sign-in URL without a
-Stackure call.
-
-Every call has one 2-second wall-clock deadline covering connect, headers, body
-and the single retry. The SDK retries once, after 500 ms, on a 5xx response or a
-connection failure, and only if more than 500 ms of the deadline remain. A
-timeout, including while reading the body, is `StackureError::Timeout` and is
-never retried.
-
-## Verify manually
-
-```rust
-let result = stackure::verify(&parts).await;
-
-if !result.authenticated {
-    let error = result.error.unwrap();
-    // error.code, error.message, error.sign_in_url
-}
-
-// result.user
-```
-
-`verify` never returns an error — transport and API failures come back as a
-500 result.
-
-## Send a magic link
-
-```rust
-let response = stackure::send_magic_link("user@example.com").await?;
-// response.message
-```
-
-## Log out
-
-```rust
-async fn logout(parts: Parts) -> Response<Body> {
-    stackure::logout(&parts).await
-}
-
-let app = Router::new().route("/logout", any(logout));
-```
-
-```html
-<form method="post" action="/logout"><button>Sign out</button></form>
-```
-
-Mount it for every method on the logout path, as `any` does here. Trigger it
-with a form or button that POSTs from the app's own page; a link or any other
-request is sent to Stackure's sign-out page, where the user confirms.
-
-A request from the app's own page is a POST with `Sec-Fetch-Site: same-origin`
-or, when that header is absent, with an `Origin` whose host and port match
-`Host` and whose scheme is `https` if the request arrived over HTTPS. A request
-that repeats `Sec-Fetch-Site`, `Origin` or `Host` never counts. It ends the
-user's access everywhere with a server-side call to Stackure, clears the app's
-cookie and returns a 303 to Stackure. If the call fails, the 303 goes to
-Stackure's sign-out page instead, where the user can finish signing out.
-
-`logout` is asynchronous: awaiting it yields the `Response<B>`, never an error.
-
-## Errors
-
-Everything except `verify` and `logout` returns `StackureError`. `logout` never
-returns an error: a failed sign-out call still ends in a redirect. Match on the
-variant, or call `.code()` for the same category string the other Stackure SDKs
-expose as `.code`:
-
-```rust
-use stackure::StackureError;
-
-match stackure::send_magic_link(email).await {
-    Err(StackureError::Validation(m)) => {}  // bad input
-    Err(StackureError::Auth(m)) => {}        // 401 from the API
-    Err(StackureError::Forbidden(m)) => {}   // 403 from the API
-    Err(StackureError::Timeout(m)) => {}     // exceeded the 2s deadline
-    Err(StackureError::Network(m)) => {}     // everything else
-    Ok(response) => {}
-}
-```
-
-## Dependencies
-
-Rust's standard library has no HTTP client and no TLS, so unlike the Go, JavaScript,
-and Python SDKs this one cannot be dependency-free. It builds directly on `hyper`
-and `rustls` — the stack axum and tonic already run on — rather than on a
-higher-level client, so in a typical axum app it adds around twenty crates.
-
-## Contributing
-
-Open a PR.
-
-## Security
-
-Report vulnerabilities via [GitHub Security Advisories](https://github.com/syi-stackure/sdk-rust/security/advisories/new). Releases publish to crates.io via OIDC trusted publishing with [GitHub build-provenance attestations](https://docs.github.com/en/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds).
+Configuration, sign-in handoff, MCP, sign-out, errors and limits: [stackure.com/docs/rust](https://stackure.com/docs/rust)
 
 ## License
 

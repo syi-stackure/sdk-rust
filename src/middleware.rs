@@ -215,7 +215,7 @@ fn same_origin_post(parts: &Parts) -> bool {
 /// End the user's access everywhere with a server-side call to Stackure,
 /// clear the app's session cookie and redirect to Stackure.
 ///
-/// Mount it for every method on the logout path. Trigger it with a form or
+/// Mount it for every method on the sign-out path. Trigger it with a form or
 /// button that POSTs from the app's own page; a link or any other request is
 /// sent to Stackure's sign-out page, where the user confirms, with no call
 /// made and the cookie left in place.
@@ -258,8 +258,8 @@ pub async fn logout<B: Default>(parts: &Parts) -> Response<B> {
         .expect("logout response is always valid")
 }
 
-/// Middleware that enforces authentication, for any tower stack — axum,
-/// tonic, or hyper.
+/// Middleware that enforces authentication, for any tower stack: axum,
+/// tonic or hyper.
 ///
 /// Completes Stackure's sign-in handoff by validating the posted
 /// `session_token` and storing it as a cookie on your domain. On success the
@@ -279,7 +279,7 @@ pub fn auth() -> AuthLayer {
     AuthLayer { mcp: false }
 }
 
-/// Middleware that protects an MCP route, for any tower stack — axum, tonic,
+/// Middleware that protects an MCP route, for any tower stack: axum, tonic
 /// or hyper.
 ///
 /// AI clients sign users in through Stackure and send the credential it issues
