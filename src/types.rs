@@ -35,7 +35,7 @@ pub struct Team {
     pub team_name: String,
 }
 
-/// A user listed by [`crate::directory`].
+/// A user listed by [`crate::directory_users`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DirectoryUser {
     /// Unique identifier for the user.
@@ -48,13 +48,27 @@ pub struct DirectoryUser {
     pub user_last_name: String,
 }
 
-/// [`crate::directory`] response.
+/// Options for [`crate::directory_users`] and [`crate::directory_teams`].
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub struct Directory {
-    /// Users in the caller's organization who can open the app.
-    pub users: Vec<DirectoryUser>,
-    /// Teams in the caller's organization who can open the app.
-    pub teams: Vec<Team>,
+pub struct DirectoryOptions {
+    /// Search text, matching a user's name, email and job title, or a team's name.
+    pub query: Option<String>,
+    /// `next_cursor` from the previous page.
+    pub cursor: Option<String>,
+    /// Page size: 100 by default, 200 at most.
+    pub limit: Option<u32>,
+}
+
+/// One page from [`crate::directory_users`] or [`crate::directory_teams`],
+/// sorted by name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DirectoryPage<T> {
+    /// The users or teams on this page.
+    pub items: Vec<T>,
+    /// Pass as `cursor` to get the next page; `None` on the last one.
+    pub next_cursor: Option<String>,
+    /// Total matches, on the first page when there are 10,000 or fewer.
+    pub total: Option<u64>,
 }
 
 /// Successful [`crate::send_magic_link`] response.
