@@ -57,6 +57,9 @@ pub struct DirectoryOptions {
     pub cursor: Option<String>,
     /// Page size: 100 by default, 200 at most.
     pub limit: Option<u32>,
+    /// Only these IDs that can open the app, up to 200, to check or name
+    /// people and teams you already store.
+    pub ids: Vec<String>,
 }
 
 /// One page from [`crate::directory_users`] or [`crate::directory_teams`],
