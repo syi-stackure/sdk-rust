@@ -2,15 +2,16 @@
 name = "stackure"
 version = "0.0.0"
 edition = "2024"
-description = "Official Stackure authentication SDK for Rust"
+rust-version = "1.85"
+description = "Stackure for Rust: passwordless auth for B2B apps as tower middleware for axum, tonic and hyper."
 license = "MIT"
 repository = "https://github.com/syi-stackure/sdk-rust"
 homepage = "https://stackure.com"
 documentation = "https://stackure.com/docs/rust"
 readme = "README.md"
 exclude = ["/CLAUDE.md"]
-keywords = ["authentication", "auth", "stackure", "passwordless", "sdk"]
-categories = ["authentication", "web-programming"]
+keywords = ["authentication", "passwordless", "tower", "axum", "stackure"]
+categories = ["authentication", "web-programming", "web-programming::http-server"]
 
 [package.metadata.docs.rs]
 all-features = true
