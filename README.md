@@ -2,10 +2,9 @@
 
 [![Check build](https://github.com/syi-stackure/sdk-rust/actions/workflows/check-build.yml/badge.svg)](https://github.com/syi-stackure/sdk-rust/actions/workflows/check-build.yml)
 [![crates.io](https://img.shields.io/crates/v/stackure.svg)](https://crates.io/crates/stackure)
-[![docs.rs](https://img.shields.io/docsrs/stackure)](https://docs.rs/stackure)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-Add Stackure sign-in to axum, tonic and hyper with tower middleware.
+[Stackure](https://stackure.com) is passwordless auth for B2B apps. This SDK adds it to axum, tonic and hyper services as tower middleware.
 
 ## Install
 
@@ -16,7 +15,7 @@ stackure = "1"
 
 Needs Rust 1.85 or later.
 
-## Example
+## Quickstart
 
 Set `STACKURE_APP_ID` and `STACKURE_APP_SECRET` from the app's page in Stackure, then add the layer:
 
@@ -33,9 +32,10 @@ let app = Router::new()
     .layer(stackure::auth());
 ```
 
-## Documentation
+## Docs
 
-Configuration, sign-in handoff, MCP, sign-out, errors and limits: [stackure.com/docs/rust](https://stackure.com/docs/rust)
+- Guide and reference: [stackure.com/docs/rust](https://stackure.com/docs/rust)
+- For AI agents: [stackure.com/llms.txt](https://stackure.com/llms.txt)
 
 ## License
 
