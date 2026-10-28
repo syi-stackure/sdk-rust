@@ -37,6 +37,7 @@ hyper-rustls = { version = "0.27", default-features = false, features = ["http1"
 http-body = "1"
 http-body-util = "0.1"
 http = "1"
+ring = "0.17"
 tower = "0.5"
 bytes = "1"
 serde = { version = "1", features = ["derive"] }
