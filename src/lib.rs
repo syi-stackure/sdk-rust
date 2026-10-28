@@ -79,7 +79,8 @@
 //!
 //! Every request with a session token is validated against Stackure, so revoking
 //! a session takes effect immediately. Requests without a well-formed token get
-//! the sign-in URL without a Stackure call.
+//! the sign-in URL without a Stackure call, except under `auth()` on localhost,
+//! where the sign-in URL comes from Stackure.
 //!
 //! # Content negotiation
 //!
@@ -164,7 +165,8 @@
 //! headers, body and the single retry. The SDK retries once, after 500 ms, on
 //! a 5xx response or a connection failure, and only if more than 500 ms of the
 //! deadline remain. A timeout, including while reading the body, surfaces as
-//! [`StackureError::Timeout`] and is never retried.
+//! [`StackureError::Timeout`] and is never retried. The localhost sign-in code
+//! swap is never retried, because each code works only once.
 //!
 //! # Errors
 //!

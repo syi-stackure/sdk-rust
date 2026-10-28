@@ -9,11 +9,13 @@ use http::request::Parts;
 use http::{HeaderValue, Request, Response, StatusCode};
 use http_body::Body;
 use http_body_util::{BodyExt, Limited};
+use ring::digest::{SHA256, digest};
+use ring::rand::{SecureRandom, SystemRandom};
 use tower::{Layer, Service};
 
 use crate::client::{
-    SESSION_COOKIE, TOKEN_PARAM, base_url, form_value, origin, sign_out, validate_mcp,
-    validate_session, validate_token,
+    CODE_COOKIE, CODE_PARAM, DevSignIn, SESSION_COOKIE, TOKEN_PARAM, VERIFIER_COOKIE, base_url,
+    cookie, exchange_code, form_value, origin, sign_out, validate_mcp, validate_token,
 };
 use crate::types::{User, VerifyError, VerifyResult};
 
@@ -33,7 +35,11 @@ use crate::types::{User, VerifyError, VerifyResult};
 /// # }
 /// ```
 pub async fn verify(parts: &Parts) -> VerifyResult {
-    let session = match validate_session(parts).await {
+    check(parts, None).await
+}
+
+async fn check(parts: &Parts, dev: Option<&DevSignIn>) -> VerifyResult {
+    let session = match validate_token(&cookie(parts, SESSION_COOKIE), parts, dev).await {
         Ok(session) => session,
         Err(e) => {
             eprintln!("stackure: verification error: {e}");
@@ -82,8 +88,26 @@ fn is_https(parts: &Parts) -> bool {
             .is_some_and(|v| v.eq_ignore_ascii_case("https"))
 }
 
-fn cookie_header(value: &str, secure: bool, max_age: Option<i32>) -> String {
-    let mut parts = format!("{SESSION_COOKIE}={value}; Path=/; HttpOnly; SameSite=Lax");
+fn host(parts: &Parts) -> &str {
+    parts
+        .headers
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .or_else(|| parts.uri.authority().map(http::uri::Authority::as_str))
+        .unwrap_or_default()
+}
+
+fn is_loopback(parts: &Parts) -> bool {
+    let host = host(parts).to_ascii_lowercase();
+    let name = host
+        .rsplit_once(':')
+        .filter(|(_, port)| !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()))
+        .map_or(host.as_str(), |(name, _)| name);
+    name == "localhost" || name == "127.0.0.1"
+}
+
+fn cookie_header(name: &str, value: &str, secure: bool, max_age: Option<i32>) -> String {
+    let mut parts = format!("{name}={value}; Path=/; HttpOnly; SameSite=Lax");
     if secure {
         parts.push_str("; Secure");
     }
@@ -96,6 +120,8 @@ fn cookie_header(value: &str, secure: bool, max_age: Option<i32>) -> String {
 
 const MAX_HANDOFF_BODY: usize = 4096;
 const SESSION_MAX_AGE: i32 = 604_800;
+const CODE_MAX_AGE: i32 = 60;
+const VERIFIER_MAX_AGE: i32 = 900;
 
 fn self_url(parts: &Parts) -> &str {
     parts
@@ -106,14 +132,107 @@ fn self_url(parts: &Parts) -> &str {
         .unwrap_or("/")
 }
 
-fn wants_form_token(parts: &Parts) -> bool {
-    parts.method == http::Method::POST
-        && parts.headers.get("origin").and_then(|v| v.to_str().ok()) == Some(origin().as_str())
+/// The `Origin` of a form POST, or `None` for any other request.
+fn form_origin(parts: &Parts) -> Option<&str> {
+    let form = parts.method == http::Method::POST
         && parts
             .headers
             .get("content-type")
             .and_then(|v| v.to_str().ok())
-            .is_some_and(|v| v.starts_with("application/x-www-form-urlencoded"))
+            .is_some_and(|v| v.starts_with("application/x-www-form-urlencoded"));
+    form.then(|| {
+        parts
+            .headers
+            .get("origin")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+    })
+}
+
+/// Base64url without padding.
+fn base64url(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    bytes.chunks(3).fold(String::new(), |mut out, chunk| {
+        let n = chunk
+            .iter()
+            .enumerate()
+            .fold(0, |n, (i, &b)| n | (usize::from(b) << (16 - 8 * i)));
+        out.extend((0..=chunk.len()).map(|i| char::from(ALPHABET[(n >> (18 - 6 * i)) & 63])));
+        out
+    })
+}
+
+fn verifier() -> Option<String> {
+    let mut bytes = [0u8; 32];
+    SystemRandom::new().fill(&mut bytes).ok()?;
+    Some(base64url(&bytes))
+}
+
+fn dev_sign_in(parts: &Parts, verifier: &str) -> DevSignIn {
+    let scheme = if is_https(parts) { "https" } else { "http" };
+    DevSignIn {
+        url: format!("{scheme}://{}{}", host(parts), self_url(parts)),
+        challenge: base64url(digest(&SHA256, verifier.as_bytes()).as_ref()),
+    }
+}
+
+fn see_other<B: From<Bytes>>(parts: &Parts, cookie: String) -> Response<B> {
+    Response::builder()
+        .status(StatusCode::SEE_OTHER)
+        .header("location", self_url(parts))
+        .header("set-cookie", cookie)
+        .body(B::from(Bytes::new()))
+        .expect("handoff response is always valid")
+}
+
+/// Stash the one-time code Stackure posted to a localhost page, or swap a
+/// stashed one for a session; `None` when there is neither.
+async fn local_sign_in<B: From<Bytes>>(parts: &Parts, posted: &str) -> Option<Response<B>> {
+    let secure = is_https(parts);
+    if posted.len() == 64
+        && posted
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        let stash = cookie_header(CODE_COOKIE, posted, secure, Some(CODE_MAX_AGE));
+        return Some(see_other(parts, stash));
+    }
+
+    let code = cookie(parts, CODE_COOKIE);
+    if code.is_empty() {
+        return None;
+    }
+    let response = Response::builder()
+        .header(
+            "set-cookie",
+            cookie_header(CODE_COOKIE, "", secure, Some(0)),
+        )
+        .header(
+            "set-cookie",
+            cookie_header(VERIFIER_COOKIE, "", secure, Some(0)),
+        );
+
+    let response = match exchange_code(&code, &cookie(parts, VERIFIER_COOKIE), parts).await {
+        Ok(token) => response
+            .status(StatusCode::SEE_OTHER)
+            .header("location", self_url(parts))
+            .header(
+                "set-cookie",
+                cookie_header(SESSION_COOKIE, &token, secure, Some(SESSION_MAX_AGE)),
+            )
+            .body(B::from(Bytes::new())),
+        Err(e) => {
+            eprintln!("stackure: localhost sign-in failed: {e}");
+            response
+                .status(StatusCode::UNAUTHORIZED)
+                .header("content-type", "application/json")
+                .body(B::from(Bytes::from(
+                    serde_json::json!({ "error": "localhost sign-in failed, reload to try again" })
+                        .to_string(),
+                )))
+        }
+    };
+    Some(response.expect("sign-in response is always valid"))
 }
 
 fn accepts_html(parts: &Parts) -> bool {
@@ -142,12 +261,7 @@ fn error_body(error: &VerifyError) -> Bytes {
 }
 
 fn mcp_url(parts: &Parts) -> String {
-    let host = parts
-        .headers
-        .get("host")
-        .and_then(|v| v.to_str().ok())
-        .or_else(|| parts.uri.authority().map(http::uri::Authority::as_str))
-        .unwrap_or_default();
+    let host = host(parts);
     let scheme = if is_https(parts) { "https" } else { "http" };
     #[cfg(feature = "axum")]
     let path = parts
@@ -250,7 +364,10 @@ pub async fn logout<B: Default>(parts: &Parts) -> Response<B> {
             Ok(()) => path = "/",
             Err(e) => eprintln!("stackure: sign-out error: {e}"),
         }
-        response = response.header("set-cookie", cookie_header("", is_https(parts), Some(0)));
+        response = response.header(
+            "set-cookie",
+            cookie_header(SESSION_COOKIE, "", is_https(parts), Some(0)),
+        );
     }
     response
         .header("location", format!("{}{path}", base_url()))
@@ -266,6 +383,12 @@ pub async fn logout<B: Default>(parts: &Parts) -> Response<B> {
 /// user is inserted into the request extensions (read it back with
 /// [`user_from_request`]). Browser requests get redirected to sign-in on 401;
 /// API requests get JSON.
+///
+/// On `localhost` or `127.0.0.1` with the app's development secret, sign-in
+/// returns to the page that asked for it: Stackure posts a one-time code
+/// there, and the layer swaps it for a session using the secret and a check
+/// value it keeps in a cookie. Only app admins of the organization that added
+/// the app can sign in this way.
 ///
 /// # Example
 ///
@@ -378,42 +501,67 @@ where
                 return inner.call(Request::from_parts(parts, body)).await;
             }
 
-            let mut token = String::new();
-            let body = if wants_form_token(&parts) {
+            let secure = is_https(&parts);
+            let local = is_loopback(&parts);
+            let from = form_origin(&parts);
+            let handoff = from == Some(origin().as_str());
+            let stash = local && (handoff || from == Some("null"));
+
+            let (mut token, mut code) = (String::new(), String::new());
+            let body = if handoff || stash {
                 let bytes = Limited::new(body, MAX_HANDOFF_BODY)
                     .collect()
                     .await
                     .map(http_body_util::Collected::to_bytes)
                     .unwrap_or_default();
-                token = form_value(&String::from_utf8_lossy(&bytes), TOKEN_PARAM);
+                let form = String::from_utf8_lossy(&bytes);
+                if handoff {
+                    token = form_value(&form, TOKEN_PARAM);
+                }
+                if stash {
+                    code = form_value(&form, CODE_PARAM);
+                }
                 ReqB::from(bytes)
             } else {
                 body
             };
 
             if !token.is_empty()
-                && validate_token(&token, &parts)
+                && validate_token(&token, &parts, None)
                     .await
                     .is_ok_and(|s| s.authenticated)
             {
-                return Ok(Response::builder()
-                    .status(StatusCode::SEE_OTHER)
-                    .header("location", self_url(&parts))
-                    .header(
-                        "set-cookie",
-                        cookie_header(&token, is_https(&parts), Some(SESSION_MAX_AGE)),
-                    )
-                    .body(ResB::from(Bytes::new()))
-                    .expect("handoff response is always valid"));
+                let session = cookie_header(SESSION_COOKIE, &token, secure, Some(SESSION_MAX_AGE));
+                return Ok(see_other(&parts, session));
             }
 
-            let result = verify(&parts).await;
+            if local {
+                if let Some(response) = local_sign_in(&parts, &code).await {
+                    return Ok(response);
+                }
+            }
+
+            let verifier = if local { verifier() } else { None };
+            let dev = verifier.as_deref().map(|v| dev_sign_in(&parts, v));
+            let result = check(&parts, dev.as_ref()).await;
 
             if let Some(error) = result.error.filter(|_| !result.authenticated) {
                 if error.code == 401 && accepts_html(&parts) && !error.sign_in_url.is_empty() {
-                    return Ok(Response::builder()
+                    let mut response = Response::builder()
                         .status(StatusCode::FOUND)
-                        .header("location", error.sign_in_url)
+                        .header("location", error.sign_in_url);
+                    if let Some(verifier) = verifier {
+                        response = response.header(
+                            "set-cookie",
+                            cookie_header(
+                                VERIFIER_COOKIE,
+                                &verifier,
+                                secure,
+                                Some(VERIFIER_MAX_AGE),
+                            ),
+                        );
+                    }
+                    return Ok(response
                         .body(ResB::from(Bytes::new()))
                         .expect("redirect response is always valid"));
                 }

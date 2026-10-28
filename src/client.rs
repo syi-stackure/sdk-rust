@@ -28,6 +28,9 @@ const RETRY_DELAY: Duration = Duration::from_millis(500);
 pub const SESSION_COOKIE: &str = "session";
 /// Name of the sign-in handoff parameter Stackure sends back.
 pub const TOKEN_PARAM: &str = "session_token";
+pub(crate) const CODE_PARAM: &str = "stackure_code";
+pub(crate) const CODE_COOKIE: &str = "stackure_code";
+pub(crate) const VERIFIER_COOKIE: &str = "stackure_verifier";
 
 /// Resolve `STACKURE_BASE_URL` from the environment, else production.
 #[must_use]
@@ -86,6 +89,7 @@ fn client() -> Result<&'static HttpsClient, StackureError> {
 #[derive(Default)]
 struct CallOpts<'a> {
     body: Option<Vec<u8>>,
+    once: bool,
     query: Option<String>,
     token: &'a str,
     bearer: &'a str,
@@ -184,7 +188,8 @@ async fn send(
                     REQUEST_TIMEOUT.as_secs()
                 ))
             })?;
-        let retry = attempt < MAX_RETRIES
+        let retry = !o.once
+            && attempt < MAX_RETRIES
             && deadline.saturating_duration_since(tokio::time::Instant::now()) > RETRY_DELAY;
         match res {
             Ok((status, headers, bytes)) if status < 500 || !retry => {
@@ -380,32 +385,89 @@ pub async fn send_magic_link(email: &str) -> Result<MagicLinkResponse, StackureE
 ///
 /// Returns [`StackureError`] on invalid input, or any transport or API failure.
 pub async fn validate_session(parts: &Parts) -> Result<Session, StackureError> {
-    validate_token(&cookie(parts, SESSION_COOKIE), parts).await
+    validate_token(&cookie(parts, SESSION_COOKIE), parts, None).await
+}
+
+/// Where a localhost sign-in returns, and the challenge for the verifier the
+/// browser keeps in a cookie.
+pub(crate) struct DevSignIn {
+    pub(crate) url: String,
+    pub(crate) challenge: String,
 }
 
 /// Validate an explicit session `token` for the browser that sent `parts`.
 ///
+/// With `dev`, the call is made even without a well-formed token, so the
+/// sign-in URL returns to `dev.url`.
+///
 /// # Errors
 ///
 /// Returns [`StackureError`] on invalid input, or any transport or API failure.
-pub async fn validate_token(token: &str, parts: &Parts) -> Result<Session, StackureError> {
+pub async fn validate_token(
+    token: &str,
+    parts: &Parts,
+    dev: Option<&DevSignIn>,
+) -> Result<Session, StackureError> {
     let app_id = app_id()?;
 
-    if !is_uuid(token) {
+    if !is_uuid(token) && dev.is_none() {
         return Ok(Session {
             sign_in_url: format!("{}/sign-in/magic-link?app_id={app_id}", base_url()),
             ..Session::default()
         });
     }
 
+    let mut query = format!("app_id={app_id}");
+    if let Some(dev) = dev {
+        use std::fmt::Write as _;
+        let _ = write!(
+            query,
+            "&return={}&challenge={}",
+            percent_encode(&dev.url),
+            percent_encode(&dev.challenge)
+        );
+    }
     get_with_session(
         "/api/public/auth/session/validate",
-        format!("app_id={app_id}"),
-        token,
+        query,
+        if is_uuid(token) { token } else { "" },
         parts,
     )
     .await
     .map(|(_, session)| session)
+}
+
+/// Swap a one-time localhost sign-in `code` and its `verifier` for a session
+/// token. Never retried: the code is single-use.
+pub(crate) async fn exchange_code(
+    code: &str,
+    verifier: &str,
+    parts: &Parts,
+) -> Result<String, StackureError> {
+    let body = serde_json::json!({ "app_id": app_id()?, "code": code, "verifier": verifier });
+
+    let data = request(
+        &Method::POST,
+        "/api/public/auth/session/exchange",
+        CallOpts {
+            body: Some(serde_json::to_vec(&body).unwrap_or_default()),
+            once: true,
+            ua: parts
+                .headers
+                .get("user-agent")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default(),
+            ip: &client_ip(parts),
+            ..CallOpts::default()
+        },
+    )
+    .await?;
+
+    data.get("session_token")
+        .and_then(serde_json::Value::as_str)
+        .filter(|token| is_uuid(token))
+        .map(String::from)
+        .ok_or_else(|| StackureError::Network("invalid exchange response".into()))
 }
 
 /// List the users in the caller's Stackure organization who can open the
