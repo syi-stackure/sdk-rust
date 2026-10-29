@@ -1,1 +1,1 @@
-Before writing any text people will see, read ../.claude/brand-voice-guidelines.md and follow it.
+Before writing any text people will see, read the brand voice guide, `voice.md` in github.com/ysashank/design, and follow it: /Users/sashank.yalamanchili/Documents/GitHub/ysashank/design/voice.md on this Mac, or `gh api repos/ysashank/design/contents/voice.md -H "Accept: application/vnd.github.raw"` elsewhere.
