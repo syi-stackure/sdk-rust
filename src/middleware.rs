@@ -42,13 +42,8 @@ async fn check(parts: &Parts, dev: Option<&DevSignIn>) -> VerifyResult {
     let session = match validate_token(&cookie(parts, SESSION_COOKIE), parts, dev).await {
         Ok(session) => session,
         Err(e) => {
-            eprintln!("stackure: verification error: {e}");
             return VerifyResult {
-                error: Some(VerifyError {
-                    code: 500,
-                    message: "Authentication verification failed".into(),
-                    sign_in_url: String::new(),
-                }),
+                error: Some(verify_failed(e)),
                 ..VerifyResult::default()
             };
         }
@@ -69,6 +64,15 @@ async fn check(parts: &Parts, dev: Option<&DevSignIn>) -> VerifyResult {
         authenticated: true,
         user: Some(user),
         error: None,
+    }
+}
+
+fn verify_failed(e: impl std::fmt::Display) -> VerifyError {
+    eprintln!("stackure: verification error: {e}");
+    VerifyError {
+        code: 500,
+        message: "Authentication verification failed".into(),
+        sign_in_url: String::new(),
     }
 }
 
@@ -223,13 +227,20 @@ async fn local_sign_in<B: From<Bytes>>(parts: &Parts, posted: &str) -> Option<Re
             .body(B::from(Bytes::new())),
         Err(e) => {
             eprintln!("stackure: localhost sign-in failed: {e}");
-            response
-                .status(StatusCode::UNAUTHORIZED)
-                .header("content-type", "application/json")
-                .body(B::from(Bytes::from(
-                    serde_json::json!({ "error": "localhost sign-in failed, reload to try again" })
-                        .to_string(),
-                )))
+            if accepts_html(parts) {
+                response
+                    .status(StatusCode::SEE_OTHER)
+                    .header("location", failure_page("localhostFailed"))
+                    .body(B::from(Bytes::new()))
+            } else {
+                response
+                    .status(StatusCode::UNAUTHORIZED)
+                    .header("content-type", "application/json")
+                    .body(B::from(Bytes::from(
+                        serde_json::json!({ "error": "localhost sign-in failed, reload to try again" })
+                            .to_string(),
+                    )))
+            }
         }
     };
     Some(response.expect("sign-in response is always valid"))
@@ -242,6 +253,28 @@ fn accepts_html(parts: &Parts) -> bool {
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default();
     accept.contains("text/html") && !accept.contains("application/json")
+}
+
+fn failure_page(message: &str) -> String {
+    format!(
+        "{}/sign-in/magic-link?state=error&message={message}",
+        base_url()
+    )
+}
+
+fn refuse<B: From<Bytes>>(parts: &Parts, error: &VerifyError) -> Response<B> {
+    if error.code == 500 && accepts_html(parts) {
+        return Response::builder()
+            .status(StatusCode::SEE_OTHER)
+            .header("location", failure_page("appUnavailable"))
+            .body(B::from(Bytes::new()))
+            .expect("redirect response is always valid");
+    }
+    Response::builder()
+        .status(StatusCode::from_u16(error.code).unwrap_or(StatusCode::UNAUTHORIZED))
+        .header("content-type", "application/json")
+        .body(B::from(error_body(error)))
+        .expect("error response is always valid")
 }
 
 fn error_body(error: &VerifyError) -> Bytes {
@@ -381,8 +414,9 @@ pub async fn logout<B: Default>(parts: &Parts) -> Response<B> {
 /// Completes Stackure's sign-in handoff by validating the posted
 /// `session_token` and storing it as a cookie on your domain. On success the
 /// user is inserted into the request extensions (read it back with
-/// [`user_from_request`]). Browser requests get redirected to sign-in on 401;
-/// API requests get JSON.
+/// [`user_from_request`]). Browser requests get redirected to sign-in on 401,
+/// and to a Stackure page that says sign-in couldn't be confirmed when the
+/// check fails; API requests get JSON.
 ///
 /// On `localhost` or `127.0.0.1` with the app's development secret, sign-in
 /// returns to the page that asked for it: Stackure posts a one-time code
@@ -526,13 +560,16 @@ where
                 body
             };
 
-            if !token.is_empty()
-                && validate_token(&token, &parts, None)
-                    .await
-                    .is_ok_and(|s| s.authenticated)
-            {
-                let session = cookie_header(SESSION_COOKIE, &token, secure, Some(SESSION_MAX_AGE));
-                return Ok(see_other(&parts, session));
+            if !token.is_empty() {
+                match validate_token(&token, &parts, None).await {
+                    Ok(s) if s.authenticated => {
+                        let session =
+                            cookie_header(SESSION_COOKIE, &token, secure, Some(SESSION_MAX_AGE));
+                        return Ok(see_other(&parts, session));
+                    }
+                    Ok(_) => {}
+                    Err(e) => return Ok(refuse(&parts, &verify_failed(e))),
+                }
             }
 
             if local {
@@ -565,11 +602,7 @@ where
                         .body(ResB::from(Bytes::new()))
                         .expect("redirect response is always valid"));
                 }
-                return Ok(Response::builder()
-                    .status(StatusCode::from_u16(error.code).unwrap_or(StatusCode::UNAUTHORIZED))
-                    .header("content-type", "application/json")
-                    .body(ResB::from(error_body(&error)))
-                    .expect("error response is always valid"));
+                return Ok(refuse(&parts, &error));
             }
 
             if let Some(user) = result.user {
