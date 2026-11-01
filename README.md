@@ -17,7 +17,7 @@ Needs Rust 1.85 or later.
 
 ## Quickstart
 
-Set `STACKURE_APP_ID` and `STACKURE_APP_SECRET` from the app's page in Stackure, then add the layer:
+Set `STACKURE_APP_ID` and `STACKURE_APP_SECRET` from the app's page in Stackure and `STACKURE_BASE_URL` to your region's address, `https://eu.stackure.com` or `https://us.stackure.com`, then add the layer:
 
 ```rust
 use axum::{Extension, Router, routing::get};
