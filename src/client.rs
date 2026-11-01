@@ -19,7 +19,6 @@ use crate::types::{
 };
 use crate::validation::{is_uuid, validate_email, validate_uuid};
 
-const DEFAULT_BASE_URL: &str = "https://stackure.com";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_RETRIES: u32 = 1;
 const RETRY_DELAY: Duration = Duration::from_millis(500);
@@ -32,16 +31,13 @@ pub(crate) const CODE_PARAM: &str = "stackure_code";
 pub(crate) const CODE_COOKIE: &str = "stackure_code";
 pub(crate) const VERIFIER_COOKIE: &str = "stackure_verifier";
 
-/// Resolve `STACKURE_BASE_URL` from the environment, else production.
+/// Resolve `STACKURE_BASE_URL` from the environment. Empty when unset.
 #[must_use]
 pub fn base_url() -> String {
     env::var("STACKURE_BASE_URL")
-        .ok()
-        .filter(|v| !v.is_empty())
-        .map_or_else(
-            || DEFAULT_BASE_URL.to_string(),
-            |v| v.trim_end_matches('/').to_string(),
-        )
+        .unwrap_or_default()
+        .trim_end_matches('/')
+        .to_string()
 }
 
 fn app_secret() -> Result<String, StackureError> {
@@ -166,6 +162,11 @@ async fn send(
     path: &str,
     o: &CallOpts<'_>,
 ) -> Result<(HeaderMap, Bytes), StackureError> {
+    if base_url().is_empty() {
+        return Err(StackureError::Validation(
+            "STACKURE_BASE_URL is not set".into(),
+        ));
+    }
     let deadline = tokio::time::Instant::now() + REQUEST_TIMEOUT;
     let secret = if o.bearer.is_empty() || o.with_secret {
         app_secret()?

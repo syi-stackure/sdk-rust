@@ -154,8 +154,12 @@
 //! `X-App-Secret` header on every call except the sign-out made by
 //! [`logout`], which carries the user's session token instead. The first call
 //! that needs either fails with [`StackureError::Validation`] when it is
-//! unset, or when `STACKURE_APP_ID` is not a UUID. `STACKURE_BASE_URL`
-//! overrides the API host (default `https://stackure.com`).
+//! unset, or when `STACKURE_APP_ID` is not a UUID.
+//!
+//! `STACKURE_BASE_URL` must be set to your region's address,
+//! `https://eu.stackure.com` or `https://us.stackure.com`. Every call goes
+//! there, and the first call fails with [`StackureError::Validation`] when it
+//! is unset.
 //!
 //! People can open a newly registered app once an app admin gives it to
 //! everyone in the organization or to one of their teams in Stackure. App
