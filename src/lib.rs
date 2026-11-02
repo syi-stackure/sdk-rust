@@ -1,7 +1,8 @@
 //! Stackure is the Rust SDK for the Stackure authentication API.
 //!
-//! Stackure provides passwordless B2B authentication. This SDK wraps the
-//! public API behind 10 free functions and a tower middleware.
+//! Stackure provides sign-in and app access for your people and your
+//! partners. This SDK wraps the public API behind 10 free functions and a
+//! tower middleware.
 //!
 //! # Quickstart
 //!
