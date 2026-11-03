@@ -1,7 +1,7 @@
 //! Stackure is the Rust SDK for the Stackure authentication API.
 //!
 //! Stackure provides sign-in and app access for your people and your
-//! partners. This SDK wraps the public API behind 10 free functions and a
+//! partners. This SDK wraps the public API behind 11 free functions and a
 //! tower middleware.
 //!
 //! # Quickstart
@@ -147,6 +147,37 @@
 //! bearer tokens are not accepted. A request without a valid session gets
 //! [`StackureError::Auth`].
 //!
+//! # Closed organizations
+//!
+//! When an organization closes in Stackure, every app it used that another
+//! organization added is asked to delete what it stores for it and for the
+//! organizations under it. Register one function to do that:
+//!
+//! ```no_run
+//! # async fn delete_org(account_id: &str) -> Result<(), std::io::Error> { Ok(()) }
+//! stackure::on_org_closed(|account_id| async move { delete_org(&account_id).await });
+//! ```
+//!
+//! `account_id` is the closed organization's ID, the same value as
+//! [`User::account_id`]. There is no scheduled job, endpoint or setting to
+//! add. The SDK checks once when [`on_org_closed`] is called inside a tokio
+//! runtime, and Stackure reports new closures on the session checks the SDK
+//! already makes. The SDK then runs the function in the background, once for
+//! each closed organization, and tells Stackure each one is done when the
+//! function returns `Ok`.
+//!
+//! The same organization can arrive again, for example when the app stops
+//! between deleting and telling Stackure, so the function must also succeed
+//! when there is nothing left to delete. When it returns an error or panics,
+//! the SDK prints it to standard error and tries that organization again on a
+//! later check, at least 5 minutes later. Stackure keeps each one waiting for
+//! 1 year.
+//!
+//! Until [`on_org_closed`] is registered, the SDK prints once to standard
+//! error that closed organizations are waiting, and the app's page in
+//! Stackure shows how many. Only the app secret receives closed
+//! organizations; the development secret never does.
+//!
 //! # Configuration
 //!
 //! `STACKURE_APP_ID` must be set to the app's UUID, shown on the app page in
@@ -184,6 +215,7 @@
 #![warn(missing_docs)]
 
 mod client;
+mod events;
 
 pub mod errors;
 pub mod middleware;
@@ -195,6 +227,7 @@ pub use client::{
     validate_session,
 };
 pub use errors::StackureError;
+pub use events::on_org_closed;
 pub use middleware::{Auth, AuthLayer, auth, logout, mcp, user_from_request, verify};
 pub use types::{
     DirectoryOptions, DirectoryPage, DirectoryUser, MagicLinkResponse, Session, Team, User,
