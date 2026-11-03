@@ -14,6 +14,7 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 
 use crate::errors::StackureError;
+use crate::events::note_events;
 use crate::types::{
     DirectoryOptions, DirectoryPage, DirectoryUser, MagicLinkResponse, Session, Team, User,
 };
@@ -428,14 +429,23 @@ pub async fn validate_token(
             percent_encode(&dev.challenge)
         );
     }
-    get_with_session(
+    let (_, out) = get_with_session::<Validated>(
         "/api/public/auth/session/validate",
         query,
         if is_uuid(token) { token } else { "" },
         parts,
     )
-    .await
-    .map(|(_, session)| session)
+    .await?;
+    note_events(out.events_waiting);
+    Ok(out.session)
+}
+
+#[derive(serde::Deserialize)]
+struct Validated {
+    #[serde(flatten)]
+    session: Session,
+    #[serde(default)]
+    events_waiting: u64,
 }
 
 /// Swap a one-time localhost sign-in `code` and its `verifier` for a session
@@ -612,6 +622,7 @@ pub(crate) struct McpSession {
     pub(crate) authenticated: bool,
     pub(crate) user: Option<User>,
     pub(crate) www_authenticate: String,
+    events_waiting: u64,
 }
 
 /// Validate an MCP request's `Authorization: Bearer` credential against
@@ -636,6 +647,56 @@ pub(crate) async fn validate_mcp(url: &str, parts: &Parts) -> Result<McpSession,
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or_default(),
             ip: &client_ip(parts),
+            ..CallOpts::default()
+        },
+    )
+    .await?;
+
+    let session: McpSession = serde_json::from_value(data)
+        .map_err(|_| StackureError::Network("unexpected API response format".into()))?;
+    note_events(session.events_waiting);
+    Ok(session)
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
+pub(crate) struct AppEvents {
+    pub(crate) events: Vec<AppEvent>,
+    pub(crate) more: bool,
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
+pub(crate) struct AppEvent {
+    pub(crate) id: String,
+    #[serde(rename = "type")]
+    pub(crate) kind: String,
+    pub(crate) data: AppEventData,
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
+pub(crate) struct AppEventData {
+    pub(crate) account_id: String,
+}
+
+/// Acknowledge the events in `ack`, then take up to `max_events` more for
+/// the app in `STACKURE_APP_ID`. Taken events are held for 5 minutes.
+pub(crate) async fn take_events(
+    ack: &[String],
+    max_events: u32,
+) -> Result<AppEvents, StackureError> {
+    let body = serde_json::json!({
+        "app_id": app_id()?,
+        "ack": (!ack.is_empty()).then_some(ack),
+        "max_events": max_events,
+    });
+
+    let data = request(
+        &Method::POST,
+        "/api/public/events",
+        CallOpts {
+            body: Some(serde_json::to_vec(&body).unwrap_or_default()),
             ..CallOpts::default()
         },
     )
