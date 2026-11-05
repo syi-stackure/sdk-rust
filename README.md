@@ -37,6 +37,10 @@ let app = Router::new()
 - Guide and reference: [stackure.com/docs/rust](https://stackure.com/docs/rust)
 - For AI agents: [stackure.com/llms.txt](https://stackure.com/llms.txt)
 
+## Model
+
+Modeled in Mappstack as the Stackure project. Every change starts in the model, then the code follows it.
+
 ## License
 
 MIT
