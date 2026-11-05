@@ -14,7 +14,6 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 
 use crate::errors::StackureError;
-use crate::events::note_events;
 use crate::types::{
     DirectoryOptions, DirectoryPage, DirectoryUser, MagicLinkResponse, Session, Team, User,
 };
@@ -376,20 +375,6 @@ pub async fn send_magic_link(email: &str) -> Result<MagicLinkResponse, StackureE
         .map_err(|_| StackureError::Network("unexpected API response format".into()))
 }
 
-/// Validate the request's session against Stackure.
-///
-/// A request without a well-formed session token gets the sign-in URL
-/// without a Stackure call.
-///
-/// Most callers want [`crate::verify`] or [`crate::auth`].
-///
-/// # Errors
-///
-/// Returns [`StackureError`] on invalid input, or any transport or API failure.
-pub async fn validate_session(parts: &Parts) -> Result<Session, StackureError> {
-    validate_token(&cookie(parts, SESSION_COOKIE), parts, None).await
-}
-
 /// Where a localhost sign-in returns, and the challenge for the verifier the
 /// browser keeps in a cookie.
 pub(crate) struct DevSignIn {
@@ -397,7 +382,8 @@ pub(crate) struct DevSignIn {
     pub(crate) challenge: String,
 }
 
-/// Validate an explicit session `token` for the browser that sent `parts`.
+/// Validate an explicit session `token` for the browser that sent `parts`,
+/// returning the session and the `events_waiting` count.
 ///
 /// With `dev`, the call is made even without a well-formed token, so the
 /// sign-in URL returns to `dev.url`.
@@ -409,13 +395,16 @@ pub async fn validate_token(
     token: &str,
     parts: &Parts,
     dev: Option<&DevSignIn>,
-) -> Result<Session, StackureError> {
+) -> Result<Validated, StackureError> {
     let app_id = app_id()?;
 
     if !is_uuid(token) && dev.is_none() {
-        return Ok(Session {
-            sign_in_url: format!("{}/sign-in/magic-link?app_id={app_id}", base_url()),
-            ..Session::default()
+        return Ok(Validated {
+            session: Session {
+                sign_in_url: format!("{}/sign-in/magic-link?app_id={app_id}", base_url()),
+                ..Session::default()
+            },
+            events_waiting: 0,
         });
     }
 
@@ -436,16 +425,15 @@ pub async fn validate_token(
         parts,
     )
     .await?;
-    note_events(out.events_waiting);
-    Ok(out.session)
+    Ok(out)
 }
 
 #[derive(serde::Deserialize)]
-struct Validated {
+pub(crate) struct Validated {
     #[serde(flatten)]
-    session: Session,
+    pub(crate) session: Session,
     #[serde(default)]
-    events_waiting: u64,
+    pub(crate) events_waiting: u64,
 }
 
 /// Swap a one-time localhost sign-in `code` and its `verifier` for a session
@@ -622,7 +610,7 @@ pub(crate) struct McpSession {
     pub(crate) authenticated: bool,
     pub(crate) user: Option<User>,
     pub(crate) www_authenticate: String,
-    events_waiting: u64,
+    pub(crate) events_waiting: u64,
 }
 
 /// Validate an MCP request's `Authorization: Bearer` credential against
@@ -652,10 +640,8 @@ pub(crate) async fn validate_mcp(url: &str, parts: &Parts) -> Result<McpSession,
     )
     .await?;
 
-    let session: McpSession = serde_json::from_value(data)
-        .map_err(|_| StackureError::Network("unexpected API response format".into()))?;
-    note_events(session.events_waiting);
-    Ok(session)
+    serde_json::from_value(data)
+        .map_err(|_| StackureError::Network("unexpected API response format".into()))
 }
 
 #[derive(Default, serde::Deserialize)]

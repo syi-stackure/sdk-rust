@@ -17,7 +17,9 @@ use crate::client::{
     CODE_COOKIE, CODE_PARAM, DevSignIn, SESSION_COOKIE, TOKEN_PARAM, VERIFIER_COOKIE, base_url,
     cookie, exchange_code, form_value, origin, sign_out, validate_mcp, validate_token,
 };
-use crate::types::{User, VerifyError, VerifyResult};
+use crate::errors::StackureError;
+use crate::events::note_events;
+use crate::types::{Session, User, VerifyError, VerifyResult};
 
 /// Verify a request without returning an error.
 ///
@@ -39,7 +41,7 @@ pub async fn verify(parts: &Parts) -> VerifyResult {
 }
 
 async fn check(parts: &Parts, dev: Option<&DevSignIn>) -> VerifyResult {
-    let session = match validate_token(&cookie(parts, SESSION_COOKIE), parts, dev).await {
+    let session = match validate(&cookie(parts, SESSION_COOKIE), parts, dev).await {
         Ok(session) => session,
         Err(e) => {
             return VerifyResult {
@@ -65,6 +67,30 @@ async fn check(parts: &Parts, dev: Option<&DevSignIn>) -> VerifyResult {
         user: Some(user),
         error: None,
     }
+}
+
+/// Validate the request's session against Stackure.
+///
+/// A request without a well-formed session token gets the sign-in URL
+/// without a Stackure call.
+///
+/// Most callers want [`crate::verify`] or [`crate::auth`].
+///
+/// # Errors
+///
+/// Returns [`StackureError`] on invalid input, or any transport or API failure.
+pub async fn validate_session(parts: &Parts) -> Result<Session, StackureError> {
+    validate(&cookie(parts, SESSION_COOKIE), parts, None).await
+}
+
+async fn validate(
+    token: &str,
+    parts: &Parts,
+    dev: Option<&DevSignIn>,
+) -> Result<Session, StackureError> {
+    let out = validate_token(token, parts, dev).await?;
+    note_events(out.events_waiting);
+    Ok(out.session)
 }
 
 fn verify_failed(e: impl std::fmt::Display) -> VerifyError {
@@ -524,6 +550,7 @@ where
                         ));
                     }
                 };
+                note_events(session.events_waiting);
                 let Some(user) = session.user.filter(|_| session.authenticated) else {
                     return Ok(mcp_error(
                         StatusCode::UNAUTHORIZED,
@@ -561,7 +588,7 @@ where
             };
 
             if !token.is_empty() {
-                match validate_token(&token, &parts, None).await {
+                match validate(&token, &parts, None).await {
                     Ok(s) if s.authenticated => {
                         let session =
                             cookie_header(SESSION_COOKIE, &token, secure, Some(SESSION_MAX_AGE));
