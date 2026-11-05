@@ -224,11 +224,12 @@ pub mod validation;
 
 pub use client::{
     SESSION_COOKIE, TOKEN_PARAM, base_url, directory_teams, directory_users, send_magic_link,
-    validate_session,
 };
 pub use errors::StackureError;
 pub use events::on_org_closed;
-pub use middleware::{Auth, AuthLayer, auth, logout, mcp, user_from_request, verify};
+pub use middleware::{
+    Auth, AuthLayer, auth, logout, mcp, user_from_request, validate_session, verify,
+};
 pub use types::{
     DirectoryOptions, DirectoryPage, DirectoryUser, MagicLinkResponse, Session, Team, User,
     VerifyError, VerifyResult,
