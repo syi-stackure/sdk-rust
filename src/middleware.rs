@@ -8,7 +8,7 @@ use bytes::Bytes;
 use http::request::Parts;
 use http::{HeaderValue, Request, Response, StatusCode};
 use http_body::Body;
-use http_body_util::{BodyExt, Limited};
+use http_body_util::BodyExt;
 use ring::digest::{SHA256, digest};
 use ring::rand::{SecureRandom, SystemRandom};
 use tower::{Layer, Service};
@@ -569,18 +569,21 @@ where
             let stash = local && (handoff || from == Some("null"));
 
             let (mut token, mut code) = (String::new(), String::new());
-            let body = if handoff || stash {
-                let bytes = Limited::new(body, MAX_HANDOFF_BODY)
+            let fits = matches!(body.size_hint().upper(), Some(n) if n <= MAX_HANDOFF_BODY as u64);
+            let body = if (handoff || stash) && fits {
+                let bytes = body
                     .collect()
                     .await
                     .map(http_body_util::Collected::to_bytes)
                     .unwrap_or_default();
-                let form = String::from_utf8_lossy(&bytes);
-                if handoff {
-                    token = form_value(&form, TOKEN_PARAM);
-                }
-                if stash {
-                    code = form_value(&form, CODE_PARAM);
+                if bytes.len() <= MAX_HANDOFF_BODY {
+                    let form = String::from_utf8_lossy(&bytes);
+                    if handoff {
+                        token = form_value(&form, TOKEN_PARAM);
+                    }
+                    if stash {
+                        code = form_value(&form, CODE_PARAM);
+                    }
                 }
                 ReqB::from(bytes)
             } else {

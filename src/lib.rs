@@ -69,7 +69,7 @@
 //! The [`auth`] layer consumes it automatically: it validates the token, stores
 //! it in a cookie on your own domain and redirects to the same URL as a GET.
 //! Invalid tokens are ignored, and handoff bodies over 4 KB are ignored (treated
-//! as no token).
+//! as no token) and passed to your app untouched.
 //!
 //! # Session binding
 //!

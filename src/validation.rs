@@ -16,7 +16,9 @@ pub fn validate_email(email: &str) -> Result<(), StackureError> {
     let Some((local, domain)) = email.split_once('@') else {
         return Err(StackureError::Validation("invalid email format".into()));
     };
-    let dotted = matches!(domain.find('.'), Some(i) if i > 0 && i + 1 < domain.len());
+    let dotted = domain
+        .match_indices('.')
+        .any(|(i, _)| i > 0 && i + 1 < domain.len());
 
     if bad(local) || bad(domain) || !dotted {
         return Err(StackureError::Validation("invalid email format".into()));

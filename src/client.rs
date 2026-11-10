@@ -554,7 +554,7 @@ async fn directory<T: serde::de::DeserializeOwned>(
             let _ = write!(query, "&{name}={}", percent_encode(v));
         }
     }
-    if let Some(n) = o.limit {
+    if let Some(n) = o.limit.filter(|&n| n != 0) {
         let _ = write!(query, "&limit={n}");
     }
     for id in &o.ids {
