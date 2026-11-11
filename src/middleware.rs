@@ -14,12 +14,17 @@ use ring::rand::{SecureRandom, SystemRandom};
 use tower::{Layer, Service};
 
 use crate::client::{
-    CODE_COOKIE, CODE_PARAM, DevSignIn, SESSION_COOKIE, TOKEN_PARAM, VERIFIER_COOKIE, base_url,
-    cookie, exchange_code, form_value, origin, sign_out, validate_mcp, validate_token,
+    DevSignIn, cookie, exchange_code, form_value, sign_out, validate_mcp, validate_token,
+};
+use crate::config::{
+    CODE_COOKIE, CODE_MAX_AGE, CODE_PARAM, HOME_PAGE, MAX_HANDOFF_BODY, SESSION_COOKIE,
+    SESSION_MAX_AGE, SIGN_IN_PAGE, SIGN_OUT_PAGE, TOKEN_PARAM, VERIFIER_BYTES, VERIFIER_COOKIE,
+    VERIFIER_MAX_AGE, base_url, origin,
 };
 use crate::errors::StackureError;
 use crate::events::note_events;
 use crate::types::{Session, User, VerifyError, VerifyResult};
+use crate::validation::is_loopback_host;
 
 /// Verify a request without returning an error.
 ///
@@ -128,12 +133,7 @@ fn host(parts: &Parts) -> &str {
 }
 
 fn is_loopback(parts: &Parts) -> bool {
-    let host = host(parts).to_ascii_lowercase();
-    let name = host
-        .rsplit_once(':')
-        .filter(|(_, port)| !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()))
-        .map_or(host.as_str(), |(name, _)| name);
-    name == "localhost" || name == "127.0.0.1"
+    is_loopback_host(host(parts))
 }
 
 fn cookie_header(name: &str, value: &str, secure: bool, max_age: Option<i32>) -> String {
@@ -147,11 +147,6 @@ fn cookie_header(name: &str, value: &str, secure: bool, max_age: Option<i32>) ->
     }
     parts
 }
-
-const MAX_HANDOFF_BODY: usize = 4096;
-const SESSION_MAX_AGE: i32 = 604_800;
-const CODE_MAX_AGE: i32 = 60;
-const VERIFIER_MAX_AGE: i32 = 900;
 
 fn self_url(parts: &Parts) -> &str {
     parts
@@ -193,7 +188,7 @@ fn base64url(bytes: &[u8]) -> String {
 }
 
 fn verifier() -> Option<String> {
-    let mut bytes = [0u8; 32];
+    let mut bytes = [0u8; VERIFIER_BYTES];
     SystemRandom::new().fill(&mut bytes).ok()?;
     Some(base64url(&bytes))
 }
@@ -282,10 +277,8 @@ fn accepts_html(parts: &Parts) -> bool {
 }
 
 fn failure_page(message: &str) -> String {
-    format!(
-        "{}/sign-in/magic-link?state=error&message={message}",
-        base_url()
-    )
+    let base = base_url();
+    format!("{base}{SIGN_IN_PAGE}?state=error&message={message}")
 }
 
 fn refuse<B: From<Bytes>>(parts: &Parts, error: &VerifyError) -> Response<B> {
@@ -417,10 +410,10 @@ fn same_origin_post(parts: &Parts) -> bool {
 #[must_use]
 pub async fn logout<B: Default>(parts: &Parts) -> Response<B> {
     let mut response = Response::builder().status(StatusCode::SEE_OTHER);
-    let mut path = "/signout";
+    let mut path = SIGN_OUT_PAGE;
     if same_origin_post(parts) {
         match sign_out(parts).await {
-            Ok(()) => path = "/",
+            Ok(()) => path = HOME_PAGE,
             Err(e) => eprintln!("stackure: sign-out error: {e}"),
         }
         response = response.header(
@@ -438,11 +431,11 @@ pub async fn logout<B: Default>(parts: &Parts) -> Response<B> {
 /// tonic or hyper.
 ///
 /// Completes Stackure's sign-in handoff by validating the posted
-/// `session_token` and storing it as a cookie on your domain. On success the
-/// user is inserted into the request extensions (read it back with
-/// [`user_from_request`]). Browser requests get redirected to sign-in on 401,
-/// and to a Stackure page that says sign-in couldn't be confirmed when the
-/// check fails; API requests get JSON.
+/// `session_token` and storing it as a `stackure_session` cookie on your
+/// domain. On success the user is inserted into the request extensions (read
+/// it back with [`user_from_request`]). Browser requests get redirected to
+/// sign-in on 401, and to a Stackure page that says sign-in couldn't be
+/// confirmed when the check fails; API requests get JSON.
 ///
 /// On `localhost` or `127.0.0.1` with the app's development secret, sign-in
 /// returns to the page that asked for it: Stackure posts a one-time code
@@ -565,7 +558,7 @@ where
             let secure = is_https(&parts);
             let local = is_loopback(&parts);
             let from = form_origin(&parts);
-            let handoff = from == Some(origin().as_str());
+            let handoff = from == Some(origin());
             let stash = local && (handoff || from == Some("null"));
 
             let (mut token, mut code) = (String::new(), String::new());

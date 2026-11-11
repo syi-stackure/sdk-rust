@@ -1,8 +1,6 @@
 //! HTTP layer for the Stackure SDK, built directly on hyper.
 
-use std::env;
 use std::sync::OnceLock;
-use std::time::Duration;
 
 use bytes::Bytes;
 use http::request::Parts;
@@ -13,56 +11,16 @@ use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 
+use crate::config::{
+    DIRECTORY_TEAMS_PATH, DIRECTORY_USERS_PATH, EVENTS_PATH, EXCHANGE_PATH, MAGIC_LINK_PATH,
+    MAX_RETRIES, PLATFORM_COOKIE, REQUEST_TIMEOUT, RETRY_DELAY, SESSION_COOKIE, SIGN_IN_PAGE,
+    SIGN_OUT_PATH, VALIDATE_PATH, app_id, app_secret, required_base_url,
+};
 use crate::errors::StackureError;
 use crate::types::{
     DirectoryOptions, DirectoryPage, DirectoryUser, MagicLinkResponse, Session, Team, User,
 };
-use crate::validation::{is_uuid, validate_email, validate_uuid};
-
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
-const MAX_RETRIES: u32 = 1;
-const RETRY_DELAY: Duration = Duration::from_millis(500);
-
-/// Name of the session cookie the SDK reads and writes.
-pub const SESSION_COOKIE: &str = "session";
-/// Name of the sign-in handoff parameter Stackure sends back.
-pub const TOKEN_PARAM: &str = "session_token";
-pub(crate) const CODE_PARAM: &str = "stackure_code";
-pub(crate) const CODE_COOKIE: &str = "stackure_code";
-pub(crate) const VERIFIER_COOKIE: &str = "stackure_verifier";
-
-/// Resolve `STACKURE_BASE_URL` from the environment. Empty when unset.
-#[must_use]
-pub fn base_url() -> String {
-    env::var("STACKURE_BASE_URL")
-        .unwrap_or_default()
-        .trim_end_matches('/')
-        .to_string()
-}
-
-fn app_secret() -> Result<String, StackureError> {
-    env::var("STACKURE_APP_SECRET")
-        .ok()
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| StackureError::Validation("STACKURE_APP_SECRET is not set".into()))
-}
-
-fn app_id() -> Result<String, StackureError> {
-    let v = env::var("STACKURE_APP_ID")
-        .ok()
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| StackureError::Validation("STACKURE_APP_ID is not set".into()))?;
-    validate_uuid(&v, "STACKURE_APP_ID")?;
-    Ok(v)
-}
-
-pub(crate) fn origin() -> String {
-    base_url()
-        .parse::<http::Uri>()
-        .ok()
-        .and_then(|u| Some(format!("{}://{}", u.scheme_str()?, u.authority()?)))
-        .unwrap_or_default()
-}
+use crate::validation::{is_uuid, validate_email};
 
 type HttpsClient = Client<HttpsConnector<HttpConnector>, Full<Bytes>>;
 
@@ -85,7 +43,6 @@ fn client() -> Result<&'static HttpsClient, StackureError> {
 #[derive(Default)]
 struct CallOpts<'a> {
     body: Option<Vec<u8>>,
-    once: bool,
     query: Option<String>,
     token: &'a str,
     bearer: &'a str,
@@ -115,7 +72,7 @@ async fn send_once(
     let cookie = if o.token.is_empty() {
         String::new()
     } else {
-        format!("{SESSION_COOKIE}={}", o.token)
+        format!("{PLATFORM_COOKIE}={}", o.token)
     };
     let bearer = if o.bearer.is_empty() {
         String::new()
@@ -125,7 +82,7 @@ async fn send_once(
     for (name, value) in [
         ("authorization", bearer.as_str()),
         ("user-agent", o.ua),
-        ("x-forwarded-for", o.ip),
+        ("stackure-client-ip", o.ip),
         ("cookie", cookie.as_str()),
     ] {
         if let Some(Ok(v)) = (!value.is_empty()).then(|| HeaderValue::from_str(value)) {
@@ -162,26 +119,22 @@ async fn send(
     path: &str,
     o: &CallOpts<'_>,
 ) -> Result<(HeaderMap, Bytes), StackureError> {
-    if base_url().is_empty() {
-        return Err(StackureError::Validation(
-            "STACKURE_BASE_URL is not set".into(),
-        ));
-    }
+    let base = required_base_url()?;
     let deadline = tokio::time::Instant::now() + REQUEST_TIMEOUT;
     let secret = if o.bearer.is_empty() || o.with_secret {
         app_secret()?
     } else {
-        String::new()
+        app_secret().unwrap_or_default()
     };
     let client = client()?;
     let url = match &o.query {
-        Some(q) => format!("{}{path}?{q}", base_url()),
-        None => format!("{}{path}", base_url()),
+        Some(q) => format!("{base}{path}?{q}"),
+        None => format!("{base}{path}"),
     };
 
     let mut attempt = 0;
     loop {
-        let res = tokio::time::timeout_at(deadline, send_once(client, method, &url, o, &secret))
+        let res = tokio::time::timeout_at(deadline, send_once(client, method, &url, o, secret))
             .await
             .map_err(|_| {
                 StackureError::Timeout(format!(
@@ -189,7 +142,7 @@ async fn send(
                     REQUEST_TIMEOUT.as_secs()
                 ))
             })?;
-        let retry = !o.once
+        let retry = *method == Method::GET
             && attempt < MAX_RETRIES
             && deadline.saturating_duration_since(tokio::time::Instant::now()) > RETRY_DELAY;
         match res {
@@ -363,7 +316,7 @@ pub async fn send_magic_link(email: &str) -> Result<MagicLinkResponse, StackureE
 
     let data = request(
         &Method::POST,
-        "/api/public/auth/magic-link/send",
+        MAGIC_LINK_PATH,
         CallOpts {
             body: Some(serde_json::to_vec(&body).unwrap_or_default()),
             ..CallOpts::default()
@@ -401,7 +354,7 @@ pub async fn validate_token(
     if !is_uuid(token) && dev.is_none() {
         return Ok(Validated {
             session: Session {
-                sign_in_url: format!("{}/sign-in/magic-link?app_id={app_id}", base_url()),
+                sign_in_url: format!("{}{SIGN_IN_PAGE}?app_id={app_id}", required_base_url()?),
                 ..Session::default()
             },
             events_waiting: 0,
@@ -419,7 +372,7 @@ pub async fn validate_token(
         );
     }
     let (_, out) = get_with_session::<Validated>(
-        "/api/public/auth/session/validate",
+        VALIDATE_PATH,
         query,
         if is_uuid(token) { token } else { "" },
         parts,
@@ -447,10 +400,9 @@ pub(crate) async fn exchange_code(
 
     let data = request(
         &Method::POST,
-        "/api/public/auth/session/exchange",
+        EXCHANGE_PATH,
         CallOpts {
             body: Some(serde_json::to_vec(&body).unwrap_or_default()),
-            once: true,
             ua: parts
                 .headers
                 .get("user-agent")
@@ -506,7 +458,7 @@ pub async fn directory_users(
     parts: &Parts,
     opts: &DirectoryOptions,
 ) -> Result<DirectoryPage<DirectoryUser>, StackureError> {
-    directory("/api/public/directory/users", parts, opts).await
+    directory(DIRECTORY_USERS_PATH, parts, opts).await
 }
 
 /// List the teams in the caller's Stackure organization that have the app,
@@ -535,7 +487,7 @@ pub async fn directory_teams(
     parts: &Parts,
     opts: &DirectoryOptions,
 ) -> Result<DirectoryPage<Team>, StackureError> {
-    directory("/api/public/directory/teams", parts, opts).await
+    directory(DIRECTORY_TEAMS_PATH, parts, opts).await
 }
 
 async fn directory<T: serde::de::DeserializeOwned>(
@@ -624,7 +576,7 @@ pub(crate) async fn validate_mcp(url: &str, parts: &Parts) -> Result<McpSession,
 
     let data = request(
         &Method::GET,
-        "/api/public/auth/session/validate",
+        VALIDATE_PATH,
         CallOpts {
             query: Some(format!("app_id={app_id}&mcp={}", percent_encode(url))),
             bearer: bearer(parts),
@@ -680,7 +632,7 @@ pub(crate) async fn take_events(
 
     let data = request(
         &Method::POST,
-        "/api/public/events",
+        EVENTS_PATH,
         CallOpts {
             body: Some(serde_json::to_vec(&body).unwrap_or_default()),
             ..CallOpts::default()
@@ -694,7 +646,8 @@ pub(crate) async fn take_events(
 
 /// End the access of the user behind the request's session token, everywhere.
 ///
-/// A request without a well-formed session token returns `Ok` without a
+/// The app secret is sent too when it's set; without it the call still goes
+/// out. A request without a well-formed session token returns `Ok` without a
 /// Stackure call. A 2xx status alone is success: the response body is never
 /// read. The call runs on its own task, so it completes even if the caller is
 /// dropped while it is in flight.
@@ -714,7 +667,7 @@ pub(crate) async fn sign_out(parts: &Parts) -> Result<(), StackureError> {
     tokio::spawn(async move {
         send(
             &Method::POST,
-            "/api/public/auth/sign-out",
+            SIGN_OUT_PATH,
             &CallOpts {
                 bearer: &token,
                 status_only: true,

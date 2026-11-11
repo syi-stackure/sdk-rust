@@ -26,6 +26,15 @@ pub fn validate_email(email: &str) -> Result<(), StackureError> {
     Ok(())
 }
 
+pub(crate) fn is_loopback_host(host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    let name = host
+        .rsplit_once(':')
+        .filter(|(_, port)| !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()))
+        .map_or(host.as_str(), |(name, _)| name);
+    name == "localhost" || name == "127.0.0.1"
+}
+
 pub(crate) fn is_uuid(value: &str) -> bool {
     let b = value.as_bytes();
     b.len() == 36

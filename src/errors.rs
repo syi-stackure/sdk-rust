@@ -10,7 +10,8 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StackureError {
     /// Input validation failed before a request was made, or
-    /// `STACKURE_APP_ID` or `STACKURE_APP_SECRET` is not set.
+    /// `STACKURE_APP_ID`, `STACKURE_APP_SECRET` or `STACKURE_BASE_URL` is
+    /// unset or invalid.
     Validation(String),
     /// The API returned 401 Unauthorized.
     Auth(String),

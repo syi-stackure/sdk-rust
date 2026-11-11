@@ -7,8 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 
 use crate::client::take_events;
-
-const MAX_EVENTS: u32 = 100;
+use crate::config::MAX_EVENTS;
 
 type Deleting = Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
 type OrgClosed = Arc<dyn Fn(String) -> Deleting + Send + Sync>;

@@ -67,16 +67,18 @@
 //! by the validate endpoint for your app ID and never by Stackure itself.
 //!
 //! The [`auth`] layer consumes it automatically: it validates the token, stores
-//! it in a cookie on your own domain and redirects to the same URL as a GET.
+//! it in a `stackure_session` cookie on your own domain and redirects to the
+//! same URL as a GET.
 //! Invalid tokens are ignored, and handoff bodies over 4 KB are ignored (treated
 //! as no token) and passed to your app untouched.
 //!
 //! # Session binding
 //!
-//! Sessions are not bound to the browser's user agent or IP address. The SDK
-//! still forwards the original `User-Agent` and `X-Forwarded-For` on every
-//! validation call, but they are informational only; validation does not
-//! depend on them.
+//! Sessions are not bound to the browser's user agent or IP address. On every
+//! call it makes for a request, the SDK still forwards the browser's
+//! `User-Agent` and sends its IP address in `Stackure-Client-IP`: the first
+//! `X-Forwarded-For` entry, else the peer address. They are informational
+//! only; validation does not depend on them.
 //!
 //! Every request with a session token is validated against Stackure, so revoking
 //! a session takes effect immediately. Requests without a well-formed token get
@@ -180,29 +182,37 @@
 //!
 //! # Configuration
 //!
+//! The SDK reads `STACKURE_APP_ID`, `STACKURE_APP_SECRET` and
+//! `STACKURE_BASE_URL` once, on its first call, and keeps them until the
+//! process exits. Restart the app after changing them.
+//!
 //! `STACKURE_APP_ID` must be set to the app's UUID, shown on the app page in
 //! Stackure, and `STACKURE_APP_SECRET` to the app secret shown when the app
 //! was registered (or last rotated) in Stackure. The secret is sent as the
-//! `X-App-Secret` header on every call except the sign-out made by
-//! [`logout`], which carries the user's session token instead. The first call
-//! that needs either fails with [`StackureError::Validation`] when it is
-//! unset, or when `STACKURE_APP_ID` is not a UUID.
+//! `X-App-Secret` header on every call. Every call that needs either fails
+//! with [`StackureError::Validation`] when it is unset, or when
+//! `STACKURE_APP_ID` is not a UUID. The sign-out made by [`logout`] needs
+//! neither: it carries the user's session token and sends the secret only when
+//! it is set.
 //!
 //! `STACKURE_BASE_URL` must be set to your region's address,
 //! `https://eu.stackure.com` or `https://us.stackure.com`. Every call goes
-//! there, and the first call fails with [`StackureError::Validation`] when it
-//! is unset.
+//! there, and every call fails with [`StackureError::Validation`] when it is
+//! unset, isn't an `https` URL or has a query or fragment. `http` is accepted
+//! only on `localhost` or `127.0.0.1`. A trailing `/` is dropped.
 //!
 //! People can open a newly registered app once an app admin gives it to
 //! everyone in the organization or to one of their teams in Stackure. App
 //! admins and the owner can always open it, so they can test sign-in first.
 //!
 //! Every SDK call has one 2-second wall-clock deadline covering connect,
-//! headers, body and the single retry. The SDK retries once, after 500 ms, on
-//! a 5xx response or a connection failure, and only if more than 500 ms of the
-//! deadline remain. A timeout, including while reading the body, surfaces as
-//! [`StackureError::Timeout`] and is never retried. The localhost sign-in code
-//! swap is never retried, because each code works only once.
+//! headers, body and any retry. Only reads are retried: a session check or
+//! directory call is tried once more, after 500 ms, on a 5xx response or a
+//! connection failure, and only if more than 500 ms of the deadline remain.
+//! Calls that change something are never retried: sending a magic link, the
+//! localhost sign-in code swap, sign-out and the closed organizations check. A
+//! timeout, including while reading the body, surfaces as
+//! [`StackureError::Timeout`] and is never retried.
 //!
 //! # Errors
 //!
@@ -215,6 +225,7 @@
 #![warn(missing_docs)]
 
 mod client;
+mod config;
 mod events;
 
 pub mod errors;
@@ -222,9 +233,8 @@ pub mod middleware;
 pub mod types;
 pub mod validation;
 
-pub use client::{
-    SESSION_COOKIE, TOKEN_PARAM, base_url, directory_teams, directory_users, send_magic_link,
-};
+pub use client::{directory_teams, directory_users, send_magic_link};
+pub use config::{SESSION_COOKIE, TOKEN_PARAM, base_url};
 pub use errors::StackureError;
 pub use events::on_org_closed;
 pub use middleware::{
